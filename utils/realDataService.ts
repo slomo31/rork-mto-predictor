@@ -1,82 +1,40 @@
 import { Game, Sport, TeamStats, GameContext, CalculationInput } from '@/types/sports';
 import { getLeagueAverages } from './mtoEngine';
-import * as mockDataService from './mockDataService';
 
 const ESPN_BASES = [
-  'https://site.api.espn.com/apis/site/v2/sports',
-  'https://site.web.api.espn.com/apis/site/v2/sports',
-  'https://sportscenter.api.espn.com/apis/site/v2/sports'
+  'https://site.api.espn.com/apis/site/v2/sports'
 ];
 
-async function tryFetch(path: string): Promise<Response | null> {
-  for (let attempt = 0; attempt < ESPN_BASES.length; attempt++) {
-    const base = ESPN_BASES[attempt];
+const PROXY_BASE = '/api/fetch';
+
+async function tryFetch(path: string) {
+  for (const base of ESPN_BASES) {
+    const upstream = `${base}${path}`;
+    const url = `${PROXY_BASE}?url=${encodeURIComponent(upstream)}`;
+    
+    console.log(`[realDataService] Trying: ${upstream}`);
+    
     try {
-      const fullUrl = `${base}${path}`;
-      const proxyUrl = `/api/fetch?url=${encodeURIComponent(fullUrl)}`;
+      const resp = await fetch(url, {
+        headers: { accept: 'application/json' },
+        cache: 'no-store'
+      });
       
-      console.log(`[realDataService] Attempt ${attempt + 1}/${ESPN_BASES.length}: ${fullUrl}`);
-      
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
-      
-      try {
-        const response = await fetch(proxyUrl, {
-          headers: {
-            'Accept': 'application/json',
-          },
-          signal: controller.signal,
-          cache: 'no-store',
-        });
-        
-        clearTimeout(timeout);
-        console.log(`[realDataService] Proxy response status: ${response.status}`);
-        
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-          console.log(`✗ Non-200 response from ${base}: ${response.status}`, errorData);
-          continue;
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json && Array.isArray(json.events)) {
+          console.log(`✓ Success: ${json.events.length} events from ${upstream}`);
+          return json;
         }
-        
-        const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.includes('application/json')) {
-          console.log(`✗ Non-JSON response from ${base}`);
-          continue;
-        }
-        
-        try {
-          const clonedResponse = response.clone();
-          const testData = await clonedResponse.json();
-          
-          if (testData.error) {
-            console.log(`✗ Proxy returned error from ${base}:`, testData.error);
-            continue;
-          }
-          
-          if (testData.events !== undefined || testData.team !== undefined) {
-            console.log(`✓ Success with base: ${base}`);
-            return response;
-          } else {
-            console.log(`✗ Unexpected response structure from ${base}`);
-          }
-        } catch (e) {
-          console.log(`✗ Invalid JSON from ${base}:`, e);
-        }
-      } catch (error: any) {
-        clearTimeout(timeout);
-        if (error.name === 'AbortError') {
-          console.log(`✗ Request timeout with ${base}`);
-        } else {
-          console.log(`✗ Network error with base ${base}:`, error);
-        }
+      } else {
+        console.warn('[realDataService] upstream status', resp.status, 'for', upstream);
       }
-    } catch (error) {
-      console.log(`✗ Unexpected error with base ${base}:`, error);
+    } catch (e: any) {
+      console.warn('[realDataService] fetch error:', e.message);
     }
   }
   
-  console.error(`[realDataService] All ${ESPN_BASES.length} base URLs failed for path: ${path}`);
-  return null;
+  throw new Error(`[realDataService] ESPN bases failed for ${path}`);
 }
 
 interface ESPNGame {
@@ -145,91 +103,15 @@ const SPORT_API_PATHS: Record<Sport, { league: string; sport: string } | null> =
   TENNIS: null,
 };
 
-function formatDateYYYYMMDD(date: Date): string {
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(date.getUTCDate()).padStart(2, '0');
-  return `${year}${month}${day}`;
+function toYyyymmddUTC(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y!, m! - 1, d!));
+  return `${dt.getUTCFullYear()}${String(dt.getUTCMonth() + 1).padStart(2, '0')}${String(dt.getUTCDate()).padStart(2, '0')}`;
 }
 
-let espnApiFailing = false;
-let lastEspnCheck = 0;
-const ESPN_CHECK_INTERVAL = 60000;
-
-async function fetchESPNGames(sport: Sport): Promise<ESPNGame[]> {
-  const apiPath = SPORT_API_PATHS[sport];
-  if (!apiPath) {
-    console.log(`No API path configured for ${sport}`);
-    return [];
-  }
-
-  const now = Date.now();
-  if (espnApiFailing && now - lastEspnCheck < ESPN_CHECK_INTERVAL) {
-    console.log(`Skipping ESPN API (known to be failing, retry in ${Math.round((ESPN_CHECK_INTERVAL - (now - lastEspnCheck)) / 1000)}s)`);
-    return [];
-  }
-
-  try {
-    const today = new Date();
-    const dateStr = formatDateYYYYMMDD(today);
-    
-    console.log(`[${sport}] Attempting to fetch games for ${dateStr}`);
-    
-    let response = await tryFetch(`/${apiPath.league}/${apiPath.sport}/scoreboard?dates=${dateStr}`);
-    
-    if (!response) {
-      console.log(`[${sport}] Date param failed, trying without dates...`);
-      response = await tryFetch(`/${apiPath.league}/${apiPath.sport}/scoreboard`);
-    }
-    
-    if (!response) {
-      console.log(`[${sport}] Scoreboard failed, trying news endpoint...`);
-      response = await tryFetch(`/${apiPath.league}/${apiPath.sport}/news`);
-    }
-    
-    if (!response) {
-      console.error(`[${sport}] All ESPN API attempts failed - falling back to mock data`);
-      espnApiFailing = true;
-      lastEspnCheck = now;
-      return [];
-    }
-
-    espnApiFailing = false;
-    const data = await response.json();
-    console.log(`[${sport}] ESPN API returned ${data.events?.length || 0} events`);
-    
-    if (!data.events || data.events.length === 0) {
-      console.log(`[${sport}] No games found for today, trying next 7 days...`);
-      const allEvents: ESPNGame[] = [];
-      
-      for (let i = 1; i <= 7; i++) {
-        const futureDate = new Date(today);
-        futureDate.setUTCDate(futureDate.getUTCDate() + i);
-        const futureDateStr = formatDateYYYYMMDD(futureDate);
-        
-        const futureResponse = await tryFetch(`/${apiPath.league}/${apiPath.sport}/scoreboard?dates=${futureDateStr}`);
-        
-        if (futureResponse) {
-          const futureData = await futureResponse.json();
-          if (futureData.events && futureData.events.length > 0) {
-            console.log(`[${sport}] Found ${futureData.events.length} games on ${futureDateStr}`);
-            allEvents.push(...futureData.events);
-          }
-        }
-        
-        if (allEvents.length >= 10) break;
-      }
-      
-      return allEvents;
-    }
-    
-    return data.events || [];
-  } catch (error) {
-    console.error(`[${sport}] Error fetching games:`, error);
-    espnApiFailing = true;
-    lastEspnCheck = now;
-    return [];
-  }
+async function fetchScoreboard(league: string, sport: string, isoDate: string) {
+  const dates = toYyyymmddUTC(isoDate);
+  return tryFetch(`/${league}/${sport}/scoreboard?dates=${dates}`);
 }
 
 function convertESPNGameToGame(espnGame: ESPNGame, sport: Sport): Game | null {
@@ -286,26 +168,27 @@ function convertESPNGameToGame(espnGame: ESPNGame, sport: Sport): Game | null {
 }
 
 export async function fetchUpcomingGames(sport: Sport): Promise<Game[]> {
-  console.log(`[${sport}] Starting fetchUpcomingGames...`);
-  
-  const espnGames = await fetchESPNGames(sport);
-  console.log(`[${sport}] ESPN returned ${espnGames.length} games`);
-  
-  const games = espnGames
-    .map(game => convertESPNGameToGame(game, sport))
-    .filter((game): game is Game => game !== null)
-    .filter(game => game.status === 'scheduled' || game.status === 'live');
-
-  console.log(`[${sport}] Converted to ${games.length} valid upcoming games`);
-  
-  if (games.length === 0) {
-    console.warn(`[${sport}] No ESPN data available - using mock data for demonstration`);
-    return mockDataService.fetchUpcomingGames(sport);
+  try {
+    const api = SPORT_API_PATHS[sport];
+    if (!api) return [];
+    
+    const today = new Date().toISOString().split('T')[0];
+    console.log(`[${sport}] Fetching games for ${today}`);
+    
+    const json = await fetchScoreboard(api.league, api.sport, today);
+    const games = (json.events || [])
+      .map((e: any) => convertESPNGameToGame(e, sport))
+      .filter(Boolean)
+      .filter((g: Game) => g.status === 'scheduled' || g.status === 'live');
+    
+    console.log(`[${sport}] Converted to ${games.length} valid upcoming games`);
+    return games.sort((a: Game, b: Game) => 
+      new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime()
+    );
+  } catch (err) {
+    console.error(`[${sport}] ESPN failed:`, err);
+    return [];
   }
-  
-  return games.sort((a, b) => 
-    new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime()
-  );
 }
 
 async function fetchRecentAveragesFromSchedule(
@@ -320,14 +203,7 @@ async function fetchRecentAveragesFromSchedule(
     const path = `/${apiPath.league}/${apiPath.sport}/teams/${teamId}/schedule`;
     console.log(`Fetching team schedule for ${teamId}`);
     
-    const response = await tryFetch(path);
-    
-    if (!response) {
-      console.log(`Failed to fetch team schedule for ${teamId}`);
-      return null;
-    }
-
-    const data = await response.json();
+    const data = await tryFetch(path);
     
     if (!data.events || data.events.length === 0) {
       console.log(`No schedule events found for team ${teamId}`);
@@ -399,9 +275,48 @@ export async function fetchGameCalculationInput(game: Game): Promise<Calculation
   
   console.log(`Fetching calculation input for ${game.awayTeam} @ ${game.homeTeam}`);
   
-  if (espnApiFailing || !game.homeTeamId || !game.awayTeamId) {
-    console.warn('ESPN API unavailable or missing team IDs, using mock data for calculation input');
-    return mockDataService.fetchGameCalculationInput(game);
+  if (!game.homeTeamId || !game.awayTeamId) {
+    console.warn('Missing team IDs, using league averages');
+    const defaultAvgPerTeam = leagueAverages.avgTotal / 2;
+    
+    const homeTeamStats: TeamStats = {
+      teamId: game.homeTeamId || 'unknown',
+      teamName: game.homeTeam,
+      avgPointsScored: defaultAvgPerTeam,
+      avgPointsAllowed: defaultAvgPerTeam,
+      pace: leagueAverages.avgPace ?? 100,
+      offensiveEfficiency: leagueAverages.avgOffensiveEfficiency ?? 1.0,
+      defensiveEfficiency: leagueAverages.avgDefensiveEfficiency ?? 1.0,
+      recentForm: [],
+      gamesPlayed: 0,
+    };
+    
+    const awayTeamStats: TeamStats = {
+      teamId: game.awayTeamId || 'unknown',
+      teamName: game.awayTeam,
+      avgPointsScored: defaultAvgPerTeam,
+      avgPointsAllowed: defaultAvgPerTeam,
+      pace: leagueAverages.avgPace ?? 100,
+      offensiveEfficiency: leagueAverages.avgOffensiveEfficiency ?? 1.0,
+      defensiveEfficiency: leagueAverages.avgDefensiveEfficiency ?? 1.0,
+      recentForm: [],
+      gamesPlayed: 0,
+    };
+    
+    return {
+      homeTeamStats,
+      awayTeamStats,
+      gameContext: {
+        venue: 'home',
+        restDays: 3,
+        injuries: [],
+        travelDistance: undefined,
+        weather: undefined,
+      },
+      sport: game.sport,
+      sportsbookLine: game.sportsbookLine,
+      leagueAverages
+    };
   }
   
   const [homeRecentStats, awayRecentStats] = await Promise.all([
