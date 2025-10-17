@@ -15,7 +15,12 @@ const SPORT_TO_ODDS_KEY: Record<Sport, string> = {
   TENNIS: 'tennis_atp'
 };
 
-export async function calculateMTO(input: CalculationInput, homeTeamName?: string, awayTeamName?: string): Promise<MTOPrediction> {
+export async function calculateMTO(
+  input: CalculationInput,
+  homeTeamName?: string,
+  awayTeamName?: string,
+  opts?: { selectedDate?: string }
+): Promise<MTOPrediction> {
   const {
     homeTeamStats,
     awayTeamStats,

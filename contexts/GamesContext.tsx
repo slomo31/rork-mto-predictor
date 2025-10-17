@@ -4,13 +4,14 @@ import { useState, useMemo, useCallback } from 'react';
 import { Sport, Game, MTOPrediction } from '@/types/sports';
 import { fetchUpcomingGames, fetchGameCalculationInput } from '@/utils/realDataService';
 import { calculateMTO } from '@/utils/mtoEngine';
+import { toISODateLocal } from '@/utils/date';
 
 const ALL_SPORTS: Sport[] = ['NFL', 'NBA', 'NHL', 'MLB', 'NCAA_FB', 'NCAA_BB', 'SOCCER', 'TENNIS'];
 
 export const [GamesProvider, useGames] = createContextHook(() => {
   const [selectedSports, setSelectedSports] = useState<Sport[]>(ALL_SPORTS);
   const [dateFilter, setDateFilter] = useState<string>('all');
-  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState<string>(toISODateLocal());
 
   const gamesQuery = useQuery({
     queryKey: ['games', selectedSports, selectedDate],
@@ -101,7 +102,7 @@ export function useGamePrediction(game: Game, isoDate?: string) {
       }
 
       const input = await fetchGameCalculationInput(game, isoDate);
-      const prediction = await calculateMTO(input, game.homeTeam, game.awayTeam);
+      const prediction = await calculateMTO(input, game.homeTeam, game.awayTeam, { selectedDate: isoDate });
       predictionCache.set(cacheKey, { ts: now, data: prediction });
       return prediction;
     },

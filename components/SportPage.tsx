@@ -1,11 +1,13 @@
-import { StyleSheet, View, Text, FlatList, RefreshControl, Pressable } from 'react-native';
+import { StyleSheet, View, Text, FlatList, RefreshControl, Pressable, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { RefreshCw, Calendar } from 'lucide-react-native';
+import { RefreshCw, Calendar as CalendarIcon } from 'lucide-react-native';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import { Sport, Game } from '@/types/sports';
 import { fetchUpcomingGames } from '@/utils/realDataService';
+import { toISODateLocal, addDaysISO } from '@/utils/date';
 import GameCard from '@/components/GameCard';
 
 interface SportPageProps {
@@ -16,9 +18,10 @@ interface SportPageProps {
 
 export default function SportPage({ sports, title, subtitle }: SportPageProps) {
   const insets = useSafeAreaInsets();
-  const [dateFilter, setDateFilter] = useState<string>('all');
+  const [dateFilter, setDateFilter] = useState<string>('today');
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState<string>(toISODateLocal());
+  const [pickerVisible, setPickerVisible] = useState(false);
 
   const gamesQuery = useQuery({
     queryKey: ['games', ...sports, selectedDate],
@@ -74,18 +77,28 @@ export default function SportPage({ sports, title, subtitle }: SportPageProps) {
 
   const handleDateFilterChange = (value: string) => {
     setDateFilter(value);
-    const today = new Date();
     if (value === 'today') {
-      setSelectedDate(today.toISOString().split('T')[0]);
+      setSelectedDate(toISODateLocal());
     } else if (value === 'tomorrow') {
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      setSelectedDate(tomorrow.toISOString().split('T')[0]);
+      setSelectedDate(addDaysISO(toISODateLocal(), 1));
     }
   };
 
+  const handleDatePicked = (date: Date) => {
+    setPickerVisible(false);
+    setSelectedDate(toISODateLocal(date));
+    setDateFilter('custom');
+  };
+
+  const getDateLabel = () => {
+    if (dateFilter === 'all') return 'All Games';
+    if (dateFilter === 'today') return 'Today';
+    if (dateFilter === 'tomorrow') return 'Tomorrow';
+    const date = new Date(selectedDate);
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
   const dateFilters = [
-    { value: 'all', label: 'All Games' },
     { value: 'today', label: 'Today' },
     { value: 'tomorrow', label: 'Tomorrow' },
   ];
@@ -108,7 +121,6 @@ export default function SportPage({ sports, title, subtitle }: SportPageProps) {
       </LinearGradient>
 
       <View style={styles.dateFilterContainer}>
-        <Calendar size={16} color="#94a3b8" style={styles.calendarIcon} />
         {dateFilters.map(filter => (
           <Pressable
             key={filter.value}
@@ -126,7 +138,31 @@ export default function SportPage({ sports, title, subtitle }: SportPageProps) {
             </Text>
           </Pressable>
         ))}
+        <Pressable
+          style={[
+            styles.dateFilterChip,
+            dateFilter === 'custom' && styles.dateFilterChipActive,
+            styles.calendarButton
+          ]}
+          onPress={() => setPickerVisible(true)}
+        >
+          <CalendarIcon size={14} color={dateFilter === 'custom' ? '#3b82f6' : '#94a3b8'} />
+          {dateFilter === 'custom' && (
+            <Text style={[styles.dateFilterText, styles.dateFilterTextActive]}>
+              {getDateLabel()}
+            </Text>
+          )}
+        </Pressable>
       </View>
+
+      <DateTimePickerModal
+        isVisible={pickerVisible}
+        mode="date"
+        onConfirm={handleDatePicked}
+        onCancel={() => setPickerVisible(false)}
+        date={new Date(selectedDate)}
+        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+      />
 
       {gamesQuery.isLoading && !gamesQuery.data ? (
         <View style={styles.centerContainer}>
@@ -240,6 +276,12 @@ const styles = StyleSheet.create({
   },
   dateFilterTextActive: {
     color: '#3b82f6',
+  },
+  calendarButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
   },
   listContent: {
     paddingVertical: 8,
