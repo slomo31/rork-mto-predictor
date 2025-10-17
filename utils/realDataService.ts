@@ -1,40 +1,55 @@
 import { Game, Sport, TeamStats, GameContext, CalculationInput } from '@/types/sports';
 import { getLeagueAverages } from './mtoEngine';
 
-const ESPN_BASES = [
-  'https://site.api.espn.com/apis/site/v2/sports'
+const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports';
+
+const CORS_PROXIES = [
+  (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+  (u: string) => `https://cors.isomorphic-git.org/${u}`,
+  (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`
 ];
 
-const PROXY_BASE = '/api/fetch';
-
-async function tryFetch(path: string) {
-  for (const base of ESPN_BASES) {
-    const upstream = `${base}${path}`;
-    const url = `${PROXY_BASE}?url=${encodeURIComponent(upstream)}`;
-    
-    console.log(`[realDataService] Trying: ${upstream}`);
+async function fetchJSONViaProxies(upstreamUrl: string) {
+  let lastErr: any;
+  
+  for (const wrap of CORS_PROXIES) {
+    const proxyUrl = wrap(upstreamUrl);
+    console.log(`[realDataService] Trying proxy for: ${upstreamUrl}`);
     
     try {
-      const resp = await fetch(url, {
+      const r = await fetch(proxyUrl, {
         headers: { accept: 'application/json' },
         cache: 'no-store'
       });
       
-      if (resp.ok) {
-        const json = await resp.json();
-        if (json && Array.isArray(json.events)) {
-          console.log(`✓ Success: ${json.events.length} events from ${upstream}`);
-          return json;
-        }
-      } else {
-        console.warn('[realDataService] upstream status', resp.status, 'for', upstream);
+      const text = await r.text();
+      const isJson =
+        (r.headers.get('content-type') || '').includes('application/json') ||
+        text.trim().startsWith('{') ||
+        text.trim().startsWith('[');
+      
+      if (!r.ok) {
+        console.warn(`[realDataService] Proxy returned status ${r.status}`);
+        lastErr = new Error(`status ${r.status}`);
+        continue;
       }
+      
+      if (!isJson) {
+        console.warn('[realDataService] Response is not JSON');
+        lastErr = new Error('not json');
+        continue;
+      }
+      
+      const json = JSON.parse(text);
+      console.log(`✓ Success via proxy`);
+      return json;
     } catch (e: any) {
-      console.warn('[realDataService] fetch error:', e.message);
+      console.warn(`[realDataService] Proxy attempt failed:`, e.message);
+      lastErr = e;
     }
   }
   
-  throw new Error(`[realDataService] ESPN bases failed for ${path}`);
+  throw lastErr || new Error('All CORS proxies failed');
 }
 
 interface ESPNGame {
@@ -111,7 +126,14 @@ function toYyyymmddUTC(iso: string): string {
 
 async function fetchScoreboard(league: string, sport: string, isoDate: string) {
   const dates = toYyyymmddUTC(isoDate);
-  return tryFetch(`/${league}/${sport}/scoreboard?dates=${dates}`);
+  const upstream = `${ESPN_BASE}/${league}/${sport}/scoreboard?dates=${dates}`;
+  const json = await fetchJSONViaProxies(upstream);
+  
+  if (!json || !Array.isArray(json.events)) {
+    throw new Error('No events array in response');
+  }
+  
+  return json.events;
 }
 
 function convertESPNGameToGame(espnGame: ESPNGame, sport: Sport): Game | null {
@@ -175,16 +197,15 @@ export async function fetchUpcomingGames(sport: Sport): Promise<Game[]> {
     const today = new Date().toISOString().split('T')[0];
     console.log(`[${sport}] Fetching games for ${today}`);
     
-    const json = await fetchScoreboard(api.league, api.sport, today);
-    const games = (json.events || [])
+    const events = await fetchScoreboard(api.league, api.sport, today);
+    const games = (events || [])
       .map((e: any) => convertESPNGameToGame(e, sport))
-      .filter(Boolean)
-      .filter((g: Game) => g.status === 'scheduled' || g.status === 'live');
+      .filter((g): g is Game => !!g)
+      .filter((g: Game) => g.status === 'scheduled' || g.status === 'live')
+      .sort((a: Game, b: Game) => new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime());
     
     console.log(`[${sport}] Converted to ${games.length} valid upcoming games`);
-    return games.sort((a: Game, b: Game) => 
-      new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime()
-    );
+    return games;
   } catch (err) {
     console.error(`[${sport}] ESPN failed:`, err);
     return [];
@@ -200,10 +221,10 @@ async function fetchRecentAveragesFromSchedule(
   if (!apiPath) return null;
 
   try {
-    const path = `/${apiPath.league}/${apiPath.sport}/teams/${teamId}/schedule`;
+    const upstream = `${ESPN_BASE}/${apiPath.league}/${apiPath.sport}/teams/${teamId}/schedule`;
     console.log(`Fetching team schedule for ${teamId}`);
     
-    const data = await tryFetch(path);
+    const data = await fetchJSONViaProxies(upstream);
     
     if (!data.events || data.events.length === 0) {
       console.log(`No schedule events found for team ${teamId}`);

@@ -115,14 +115,22 @@ export default function SportPage({ sports, title, subtitle }: SportPageProps) {
         ))}
       </View>
 
-      {gamesQuery.isLoading && filteredGames.length === 0 ? (
+      {gamesQuery.isLoading && !gamesQuery.data ? (
         <View style={styles.centerContainer}>
           <Text style={styles.loadingText}>Loading predictions...</Text>
+        </View>
+      ) : gamesQuery.error ? (
+        <View style={styles.centerContainer}>
+          <Text style={styles.emptyText}>Unable to load games</Text>
+          <Text style={styles.emptySubtext}>ESPN data temporarily unavailable</Text>
+          <Pressable style={styles.retryButton} onPress={onRefresh}>
+            <Text style={styles.retryText}>Retry</Text>
+          </Pressable>
         </View>
       ) : filteredGames.length === 0 ? (
         <View style={styles.centerContainer}>
           <Text style={styles.emptyText}>No games found</Text>
-          <Text style={styles.emptySubtext}>Try selecting different dates</Text>
+          <Text style={styles.emptySubtext}>Check back later for upcoming games</Text>
         </View>
       ) : (
         <FlatList
@@ -263,5 +271,17 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontSize: 12,
     fontWeight: '500' as const,
+  },
+  retryButton: {
+    marginTop: 16,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    backgroundColor: '#3b82f6',
+    borderRadius: 8,
+  },
+  retryText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600' as const,
   },
 });
