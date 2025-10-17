@@ -135,6 +135,15 @@ function convertESPNGameToGame(espnGame: ESPNGame, sport: Sport): Game | null {
     const status = espnGame.status.type.state === 'pre' ? 'scheduled' :
                    espnGame.status.type.state === 'in' ? 'live' : 'completed';
 
+    let sportsbookLine: number | undefined;
+    if (competition.odds && competition.odds.length > 0) {
+      const odds = competition.odds[0];
+      if (odds.overUnder) {
+        sportsbookLine = odds.overUnder;
+        console.log(`Found real sportsbook line for ${homeTeam.team.displayName} vs ${awayTeam.team.displayName}: ${sportsbookLine}`);
+      }
+    }
+
     return {
       id: `${sport}-${espnGame.id}`,
       sport,
@@ -147,6 +156,7 @@ function convertESPNGameToGame(espnGame: ESPNGame, sport: Sport): Game | null {
       status,
       homeTeamLogo: homeTeam.team.logo,
       awayTeamLogo: awayTeam.team.logo,
+      sportsbookLine,
     };
   } catch (error) {
     console.error('Error converting ESPN game:', error);
@@ -177,19 +187,46 @@ async function fetchTeamStatsFromESPN(teamId: string, sport: Sport): Promise<Par
   if (!apiPath) return null;
 
   try {
-    const url = `${ESPN_BASE_URL}/${apiPath.league}/${apiPath.sport}/teams/${teamId}/statistics`;
-    const response = await fetch(url);
+    const url = `${ESPN_BASE_URL}/${apiPath.league}/${apiPath.sport}/teams/${teamId}`;
+    console.log(`Fetching team stats from: ${url}`);
+    const response = await fetch(url, {
+      headers: { 'Accept': 'application/json' },
+    });
     
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.log(`Failed to fetch team stats: ${response.status}`);
+      return null;
+    }
 
     const data = await response.json();
     
-    const ppg = data.stats?.find((s: any) => s.name === 'pointsPerGame' || s.name === 'avgPointsPerGame')?.value;
-    const papg = data.stats?.find((s: any) => s.name === 'pointsAllowedPerGame' || s.name === 'avgPointsAllowedPerGame')?.value;
+    if (!data.team || !data.team.record) {
+      console.log('No team record data available');
+      return null;
+    }
+
+    const stats = data.team.record?.items?.[0]?.stats || [];
+    
+    const ppg = stats.find((s: any) => 
+      s.name === 'pointsFor' || 
+      s.name === 'avgPointsFor' ||
+      s.name === 'pointsPerGame'
+    )?.value;
+    
+    const papg = stats.find((s: any) => 
+      s.name === 'pointsAgainst' || 
+      s.name === 'avgPointsAgainst' ||
+      s.name === 'pointsAllowedPerGame'
+    )?.value;
+
+    const gp = stats.find((s: any) => s.name === 'gamesPlayed')?.value;
+
+    console.log(`Team ${teamId} stats - PPG: ${ppg}, PAPG: ${papg}, GP: ${gp}`);
 
     return {
       avgPointsScored: ppg ? parseFloat(ppg) : undefined,
       avgPointsAllowed: papg ? parseFloat(papg) : undefined,
+      gamesPlayed: gp ? parseInt(gp) : undefined,
     };
   } catch (error) {
     console.error(`Error fetching team stats for ${teamId}:`, error);
@@ -254,14 +291,50 @@ function generateGameContext(sport: Sport): GameContext {
 }
 
 export async function fetchGameCalculationInput(game: Game): Promise<CalculationInput> {
-  const homeTeamStats = generateTeamStats(game.sport, game.homeTeam, game.homeTeamId);
-  const awayTeamStats = generateTeamStats(game.sport, game.awayTeam, game.awayTeamId);
-  const gameContext = generateGameContext(game.sport);
   const leagueAverages = getLeagueAverages(game.sport);
   
-  const hasSportsbookLine = Math.random() > 0.2;
-  const sportsbookLine = hasSportsbookLine ? 
-    leagueAverages.avgTotal + (Math.random() - 0.5) * 20 : undefined;
+  console.log(`Fetching calculation input for ${game.awayTeam} @ ${game.homeTeam}`);
+  
+  const [homeStatsFromAPI, awayStatsFromAPI] = await Promise.all([
+    fetchTeamStatsFromESPN(game.homeTeamId, game.sport),
+    fetchTeamStatsFromESPN(game.awayTeamId, game.sport)
+  ]);
+  
+  let homeTeamStats = generateTeamStats(game.sport, game.homeTeam, game.homeTeamId);
+  let awayTeamStats = generateTeamStats(game.sport, game.awayTeam, game.awayTeamId);
+  
+  if (homeStatsFromAPI) {
+    console.log(`Using real stats for home team ${game.homeTeam}`);
+    homeTeamStats = {
+      ...homeTeamStats,
+      avgPointsScored: homeStatsFromAPI.avgPointsScored || homeTeamStats.avgPointsScored,
+      avgPointsAllowed: homeStatsFromAPI.avgPointsAllowed || homeTeamStats.avgPointsAllowed,
+      gamesPlayed: homeStatsFromAPI.gamesPlayed || homeTeamStats.gamesPlayed,
+    };
+  } else {
+    console.log(`Using estimated stats for home team ${game.homeTeam}`);
+  }
+  
+  if (awayStatsFromAPI) {
+    console.log(`Using real stats for away team ${game.awayTeam}`);
+    awayTeamStats = {
+      ...awayTeamStats,
+      avgPointsScored: awayStatsFromAPI.avgPointsScored || awayTeamStats.avgPointsScored,
+      avgPointsAllowed: awayStatsFromAPI.avgPointsAllowed || awayTeamStats.avgPointsAllowed,
+      gamesPlayed: awayStatsFromAPI.gamesPlayed || awayTeamStats.gamesPlayed,
+    };
+  } else {
+    console.log(`Using estimated stats for away team ${game.awayTeam}`);
+  }
+  
+  const gameContext = generateGameContext(game.sport);
+  
+  const sportsbookLine = game.sportsbookLine;
+  if (sportsbookLine) {
+    console.log(`Using REAL sportsbook line: ${sportsbookLine}`);
+  } else {
+    console.log('No sportsbook line available for this game');
+  }
   
   return {
     homeTeamStats,

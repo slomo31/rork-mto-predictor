@@ -66,6 +66,7 @@ export interface Game {
   status: 'scheduled' | 'live' | 'completed';
   homeTeamLogo?: string;
   awayTeamLogo?: string;
+  sportsbookLine?: number;
 }
 
 export interface CalculationInput {
