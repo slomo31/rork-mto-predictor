@@ -4,6 +4,7 @@ import * as mockDataService from './mockDataService';
 
 const ESPN_BASES = [
   'https://site.api.espn.com/apis/site/v2/sports',
+  'https://site.api.espn.com/apis/v2/sports',
   'https://sports.core.api.espn.com/v2/sports'
 ];
 
@@ -17,7 +18,7 @@ async function tryFetch(path: string): Promise<Response | null> {
       console.log(`[realDataService] Attempt ${attempt + 1}/${ESPN_BASES.length}: ${fullUrl}`);
       
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 7000);
+      const timeout = setTimeout(() => controller.abort(), 10000);
       
       try {
         const response = await fetch(proxyUrl, {
@@ -172,10 +173,16 @@ async function fetchESPNGames(sport: Sport): Promise<ESPNGame[]> {
     const today = new Date();
     const dateStr = formatDateYYYYMMDD(today);
     
-    const path = `/${apiPath.league}/${apiPath.sport}/scoreboard?dates=${dateStr}`;
+    let path = `/${apiPath.league}/${apiPath.sport}/scoreboard?dates=${dateStr}`;
     console.log(`Fetching ${sport} games for date ${dateStr}`);
     
-    const response = await tryFetch(path);
+    let response = await tryFetch(path);
+    
+    if (!response) {
+      console.log(`Trying without dates param for ${sport}...`);
+      path = `/${apiPath.league}/${apiPath.sport}/scoreboard`;
+      response = await tryFetch(path);
+    }
     
     if (!response) {
       console.error(`All ESPN API attempts failed for ${sport}`);
