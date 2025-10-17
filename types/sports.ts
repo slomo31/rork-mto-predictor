@@ -73,6 +73,7 @@ export interface Game {
   homeTeamLogo?: string;
   awayTeamLogo?: string;
   sportsbookLine?: number;
+  dataSource?: 'oddsapi' | 'espn' | 'merged';
 }
 
 export interface CalculationInput {

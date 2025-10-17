@@ -42,8 +42,15 @@ export default function GameCard({ game, isoDate }: GameCardProps) {
       onPress={() => setShowDetails(!showDetails)}
     >
       <View style={styles.header}>
-        <View style={[styles.sportBadge, { backgroundColor: sportInfo.color }]}>
-          <Text style={styles.sportText}>{sportInfo.abbreviation}</Text>
+        <View style={styles.headerLeft}>
+          <View style={[styles.sportBadge, { backgroundColor: sportInfo.color }]}>
+            <Text style={styles.sportText}>{sportInfo.abbreviation}</Text>
+          </View>
+          {process.env.NODE_ENV !== 'production' && game.dataSource && (
+            <View style={styles.sourceBadge}>
+              <Text style={styles.sourceText}>{game.dataSource}</Text>
+            </View>
+          )}
         </View>
         <View style={styles.dateTimeContainer}>
           <Text style={styles.dateText}>{dateString}</Text>
@@ -75,8 +82,13 @@ export default function GameCard({ game, isoDate }: GameCardProps) {
         <View style={styles.mtoBox}>
           <Text style={styles.mtoLabel}>Predicted MTO</Text>
           <Text style={styles.mtoValue}>{prediction.predictedMTO.toFixed(1)}</Text>
-          {prediction.sportsbookLine && (
+          {prediction.sportsbookLine ? (
             <Text style={styles.lineText}>Line: {prediction.sportsbookLine.toFixed(1)}</Text>
+          ) : (
+            <View style={styles.noLineContainer}>
+              <Text style={styles.noLineText}>No line yet</Text>
+              <Text style={styles.modelOnlyBadge}>Model only</Text>
+            </View>
           )}
         </View>
 
@@ -188,10 +200,30 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
   },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   sportBadge: {
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,
+  },
+  sourceBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#0f172a',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  sourceText: {
+    color: '#94a3b8',
+    fontSize: 9,
+    fontWeight: '700' as const,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
   },
   sportText: {
     color: '#ffffff',
@@ -277,6 +309,30 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
     fontWeight: '500' as const,
+  },
+  noLineContainer: {
+    marginTop: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  noLineText: {
+    color: '#64748b',
+    fontSize: 11,
+    fontStyle: 'italic' as const,
+  },
+  modelOnlyBadge: {
+    color: '#fbbf24',
+    fontSize: 9,
+    fontWeight: '700' as const,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: '#fbbf2420',
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#fbbf2440',
   },
   confidenceBox: {
     flex: 1,

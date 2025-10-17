@@ -1,123 +1,37 @@
 import { Game, Sport, TeamStats, GameContext, CalculationInput } from '@/types/sports';
 import { getLeagueAverages } from './mtoEngine';
-import { getFixturesForDate, extractConsensusTotal, type OddsFixture } from '@/utils/OddsService';
-import { toYyyymmddUTC, isISOWithinLocalDate } from '@/utils/date';
+import { normalizeTeam } from './OddsService';
+import { toYyyymmddUTC } from './date';
 
-const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports';
+const DEV = process.env.NODE_ENV !== 'production';
 
-const CORS_PROXIES = [
-  (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-  (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-  (u: string) => `https://cors-anywhere.herokuapp.com/${u}`,
-  (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
-];
-
-async function fetchJSONViaProxies(upstreamUrl: string, timeoutMs = 8000) {
-  let lastErr: any;
-  
-  for (const wrap of CORS_PROXIES) {
-    const proxyUrl = wrap(upstreamUrl);
-    console.log(`[realDataService] Trying proxy for: ${upstreamUrl}`);
-    
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      
-      const r = await fetch(proxyUrl, {
-        headers: { 
-          accept: 'application/json',
-          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        },
-        cache: 'no-store',
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-      
-      const text = await r.text();
-      const isJson =
-        (r.headers.get('content-type') || '').includes('application/json') ||
-        text.trim().startsWith('{') ||
-        text.trim().startsWith('[');
-      
-      if (!r.ok) {
-        console.warn(`[realDataService] Proxy returned status ${r.status}`);
-        lastErr = new Error(`status ${r.status}`);
-        continue;
-      }
-      
-      if (!isJson) {
-        console.warn('[realDataService] Response is not JSON');
-        lastErr = new Error('not json');
-        continue;
-      }
-      
-      const json = JSON.parse(text);
-      console.log(`✓ Success via proxy`);
-      return json;
-    } catch (e: any) {
-      console.warn(`[realDataService] Proxy attempt failed:`, e.message);
-      lastErr = e;
-    }
-  }
-  
-  throw lastErr || new Error('All CORS proxies failed');
-}
-
-interface ESPNGame {
+type RawGame = {
   id: string;
-  date: string;
-  status: {
-    type: {
-      name: string;
-      state: string;
-    };
-  };
-  competitions: Array<{
-    id: string;
-    venue: {
-      fullName: string;
-    };
-    competitors: Array<{
-      id: string;
-      team: {
-        id: string;
-        displayName: string;
-        abbreviation: string;
-        logo: string;
-      };
-      homeAway: 'home' | 'away';
-      statistics?: Array<{
-        name: string;
-        displayValue: string;
-      }>;
-      records?: Array<{
-        type: string;
-        summary: string;
-      }>;
-    }>;
-    odds?: Array<{
-      details: string;
-      overUnder: number;
-    }>;
-  }>;
-}
+  home: string;
+  away: string;
+  homeId?: string;
+  awayId?: string;
+  homeLogo?: string;
+  awayLogo?: string;
+  commenceTimeUTC: string;
+  venue?: string;
+  status?: string;
+  total?: number;
+  numBooks?: number;
+  booksStd?: number;
+  source: 'oddsapi' | 'espn' | 'merged';
+};
 
-interface ESPNScheduleEvent {
-  id: string;
-  date: string;
-  competitions?: Array<{
-    competitors: Array<{
-      id: string;
-      score?: string;
-      homeAway: 'home' | 'away';
-      team: {
-        id: string;
-        displayName: string;
-      };
-    }>;
-  }>;
-}
+const SOURCE_POLICY: Record<Sport, ('oddsapi' | 'espn')[]> = {
+  NFL: ['oddsapi', 'espn'],
+  NCAA_FB: ['oddsapi', 'espn'],
+  NBA: ['oddsapi', 'espn'],
+  NCAA_BB: ['oddsapi', 'espn'],
+  NHL: ['oddsapi', 'espn'],
+  MLB: ['oddsapi', 'espn'],
+  SOCCER: ['oddsapi', 'espn'],
+  TENNIS: ['oddsapi'],
+};
 
 const SPORT_API_PATHS: Record<Sport, { league: string; sport: string } | null> = {
   NFL: { league: 'football', sport: 'nfl' },
@@ -140,236 +54,162 @@ const ODDSAPI_SPORT_KEYS: Partial<Record<Sport, string>> = {
   SOCCER: 'soccer_usa_mls',
 };
 
-async function fetchScoreboardEvents(league: string, sport: string, isoDate: string) {
-  const dates = toYyyymmddUTC(isoDate);
-  const upstream = `${ESPN_BASE}/${league}/${sport}/scoreboard?dates=${dates}`;
-  console.log(`[fetchScoreboardEvents] Fetching: ${upstream}`);
-  const json = await fetchJSONViaProxies(upstream);
-  
-  if (!json || !Array.isArray(json.events)) {
-    console.log(`[fetchScoreboardEvents] No events array in response for ${league}/${sport}`);
-    return [];
-  }
-  
-  console.log(`[fetchScoreboardEvents] Got ${json.events.length} events from ESPN`);
-  return json.events;
+function getUTCWindow(isoDate: string): { start: number; end: number } {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const start = Date.UTC(y!, m! - 1, d!, 0, 0, 0);
+  const end = Date.UTC(y!, m! - 1, d!, 23, 59, 59, 999);
+  return { start, end };
 }
 
-function filterToLocalDay(events: any[], isoDate: string) {
-  console.log(`[filterToLocalDay] Filtering ${events.length} events for date ${isoDate}`);
-  const filtered = (events || []).filter(ev => {
-    const dt = ev?.date ?? ev?.competitions?.[0]?.date;
-    if (!dt) {
-      console.log(`[filterToLocalDay] Event missing date, keeping it`);
-      return true;
-    }
-    const withinDay = isISOWithinLocalDate(dt, isoDate);
-    if (!withinDay) {
-      console.log(`[filterToLocalDay] Filtering out: ${dt} not within ${isoDate}`);
-    } else {
-      console.log(`[filterToLocalDay] Keeping: ${dt} within ${isoDate}`);
-    }
-    return withinDay;
-  });
-  console.log(`[filterToLocalDay] Result: ${filtered.length} of ${events.length} events kept`);
-  return filtered;
+function withinWindow(utcMs: number, start: number, end: number): boolean {
+  return utcMs >= start && utcMs <= end;
 }
 
-function convertESPNGameToGame(espnGame: ESPNGame, sport: Sport): Game | null {
+async function fetchFromOddsAPI(sport: Sport, isoDate: string): Promise<RawGame[]> {
+  const sportKey = ODDSAPI_SPORT_KEYS[sport];
+  if (!sportKey) return [];
+
   try {
-    const competition = espnGame.competitions[0];
-    if (!competition) {
-      console.log('No competition data in event');
-      return null;
-    }
+    const res = await fetch(`/api/odds?sport=${encodeURIComponent(sportKey)}&regions=us&markets=totals`, {
+      headers: { accept: 'application/json' },
+      cache: 'no-store',
+    });
 
-    const homeTeam = competition.competitors.find(c => c.homeAway === 'home');
-    const awayTeam = competition.competitors.find(c => c.homeAway === 'away');
-
-    if (!homeTeam || !awayTeam) {
-      console.log('Missing home or away team');
-      return null;
-    }
-
-    if (!homeTeam.team.id || !awayTeam.team.id) {
-      console.log('Missing team IDs');
-      return null;
-    }
-
-    const status = espnGame.status.type.state === 'pre' ? 'scheduled' :
-                   espnGame.status.type.state === 'in' ? 'live' : 'completed';
-
-    let sportsbookLine: number | undefined;
-    if (competition.odds && competition.odds.length > 0) {
-      const odds = competition.odds[0];
-      if (odds.overUnder && !isNaN(odds.overUnder)) {
-        sportsbookLine = odds.overUnder;
-        console.log(`Found real sportsbook line for ${homeTeam.team.displayName} vs ${awayTeam.team.displayName}: ${sportsbookLine}`);
-      }
-    }
-
-    return {
-      id: `${sport}-${espnGame.id}`,
-      sport,
-      homeTeam: homeTeam.team.displayName,
-      awayTeam: awayTeam.team.displayName,
-      homeTeamId: homeTeam.team.id,
-      awayTeamId: awayTeam.team.id,
-      gameDate: espnGame.date || new Date().toISOString(),
-      venue: competition.venue?.fullName || 'TBD',
-      status,
-      homeTeamLogo: homeTeam.team.logo || undefined,
-      awayTeamLogo: awayTeam.team.logo || undefined,
-      sportsbookLine,
-    };
-  } catch (error) {
-    console.error('Error converting ESPN game:', error);
-    return null;
-  }
-}
-
-const ODDSAPI_PRIORITY_SPORTS: Sport[] = ['NBA', 'NHL', 'MLB', 'NCAA_BB'];
-
-export async function fetchUpcomingGames(sport: Sport, isoDate: string): Promise<Game[]> {
-  const api = SPORT_API_PATHS[sport];
-  const oddsKey = ODDSAPI_SPORT_KEYS[sport];
-  
-  console.log(`[${sport}] ====== Fetching games for ${isoDate} ======`);
-  
-  if (ODDSAPI_PRIORITY_SPORTS.includes(sport) && oddsKey) {
-    console.log(`[${sport}] Using OddsAPI as primary source (ESPN unreliable for this sport)`);
-    try {
-      const fixtures = await getFixturesForDate(oddsKey, isoDate);
-      console.log(`[${sport}] OddsAPI returned ${fixtures.length} fixtures`);
-      
-      const gamesFromOdds: Game[] = fixtures
-        .filter((f: OddsFixture) => {
-          const withinDay = isISOWithinLocalDate(f.commence_time, isoDate);
-          return withinDay;
-        })
-        .map((f: OddsFixture, idx: number) => {
-          const sportsbookLine = extractConsensusTotal(f);
-          const gameDate = new Date(f.commence_time);
-          const gameDateStr = gameDate.toISOString();
-          
-          console.log(`  ${f.away_team} @ ${f.home_team}, Line: ${sportsbookLine ?? 'none'}`);
-          
-          return {
-            id: `${sport}-odds-${f.id || idx}`,
-            sport,
-            homeTeam: f.home_team,
-            awayTeam: f.away_team,
-            homeTeamId: f.home_team,
-            awayTeamId: f.away_team,
-            gameDate: gameDateStr,
-            venue: 'TBD',
-            status: 'scheduled' as const,
-            homeTeamLogo: undefined,
-            awayTeamLogo: undefined,
-            sportsbookLine,
-          };
-        }).sort((a: Game, b: Game) => new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime());
-      
-      console.info(`[${sport}] ✓ OddsAPI primary: ${gamesFromOdds.length} games`);
-      return gamesFromOdds;
-    } catch (e) {
-      console.error(`[${sport}] OddsAPI primary failed:`, e);
+    if (!res.ok) {
+      if (DEV) console.warn(`[${sport}] OddsAPI HTTP ${res.status}`);
       return [];
     }
+
+    const json = await res.json();
+    const games = Array.isArray(json?.games) ? json.games : [];
+    
+    const { start, end } = getUTCWindow(isoDate);
+    const filtered = games.filter((g: RawGame) => {
+      const t = new Date(g.commenceTimeUTC).getTime();
+      return withinWindow(t, start, end);
+    });
+
+    if (DEV) console.log(`[${sport}] OddsAPI: ${filtered.length} games on ${isoDate}`);
+    return filtered;
+  } catch (e) {
+    if (DEV) console.warn(`[${sport}] OddsAPI error:`, e);
+    return [];
   }
-  
-  if (!api) {
-    console.log(`[${sport}] No API path configured`);
-    if (oddsKey) {
-      console.log(`[${sport}] Falling back to OddsAPI`);
-      try {
-        const fixtures = await getFixturesForDate(oddsKey, isoDate);
-        const gamesFromOdds: Game[] = fixtures
-          .filter((f: OddsFixture) => isISOWithinLocalDate(f.commence_time, isoDate))
-          .map((f: OddsFixture, idx: number) => ({
-            id: `${sport}-odds-${f.id || idx}`,
-            sport,
-            homeTeam: f.home_team,
-            awayTeam: f.away_team,
-            homeTeamId: f.home_team,
-            awayTeamId: f.away_team,
-            gameDate: new Date(f.commence_time).toISOString(),
-            venue: 'TBD',
-            status: 'scheduled' as const,
-            homeTeamLogo: undefined,
-            awayTeamLogo: undefined,
-            sportsbookLine: extractConsensusTotal(f),
-          })).sort((a: Game, b: Game) => new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime());
-        return gamesFromOdds;
-      } catch (e) {
-        console.error(`[${sport}] OddsAPI fallback failed:`, e);
+}
+
+async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> {
+  const api = SPORT_API_PATHS[sport];
+  if (!api) return [];
+
+  try {
+    const dates = toYyyymmddUTC(isoDate);
+    const path = `/${api.league}/${api.sport}/scoreboard`;
+    const res = await fetch(`/api/espn?path=${encodeURIComponent(path)}&dates=${dates}`, {
+      headers: { accept: 'application/json' },
+      cache: 'no-store',
+    });
+
+    if (!res.ok) {
+      if (DEV) console.warn(`[${sport}] ESPN HTTP ${res.status}`);
+      return [];
+    }
+
+    const json = await res.json();
+    const games = Array.isArray(json?.games) ? json.games : [];
+
+    const { start, end } = getUTCWindow(isoDate);
+    const filtered = games.filter((g: RawGame) => {
+      const t = new Date(g.commenceTimeUTC).getTime();
+      return withinWindow(t, start, end);
+    });
+
+    if (DEV) console.log(`[${sport}] ESPN: ${filtered.length} games on ${isoDate}`);
+    return filtered;
+  } catch (e) {
+    if (DEV) console.warn(`[${sport}] ESPN error:`, e);
+    return [];
+  }
+}
+
+function dedupeAndMerge(sources: { games: RawGame[]; source: 'oddsapi' | 'espn' }[]): RawGame[] {
+  const map = new Map<string, RawGame>();
+
+  for (const { games, source } of sources) {
+    for (const g of games) {
+      const normHome = normalizeTeam(g.home);
+      const normAway = normalizeTeam(g.away);
+      const timeKey = Math.floor(new Date(g.commenceTimeUTC).getTime() / (10 * 60 * 1000));
+      const key = `${normHome}|${normAway}|${timeKey}`;
+
+      const existing = map.get(key);
+      if (!existing) {
+        map.set(key, { ...g, source });
+      } else {
+        const preferLine = g.total !== undefined && existing.total === undefined;
+        const preferLogos = (g.homeLogo || g.awayLogo) && (!existing.homeLogo && !existing.awayLogo);
+        
+        if (preferLine || preferLogos) {
+          map.set(key, {
+            ...existing,
+            total: g.total ?? existing.total,
+            numBooks: g.numBooks ?? existing.numBooks,
+            booksStd: g.booksStd ?? existing.booksStd,
+            homeLogo: g.homeLogo ?? existing.homeLogo,
+            awayLogo: g.awayLogo ?? existing.awayLogo,
+            homeId: g.homeId ?? existing.homeId,
+            awayId: g.awayId ?? existing.awayId,
+            venue: g.venue ?? existing.venue,
+            source: 'merged' as const,
+          });
+        }
       }
     }
-    return [];
   }
-  
-  try {
-    const rawEvents = await fetchScoreboardEvents(api.league, api.sport, isoDate);
-    const events = filterToLocalDay(rawEvents, isoDate);
-    const games = (events || [])
-      .map((e: any) => convertESPNGameToGame(e, sport))
-      .filter((g: any): g is Game => !!g)
-      .filter((g: Game) => g.status === 'scheduled' || g.status === 'live')
-      .sort((a: Game, b: Game) => new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime());
+
+  return Array.from(map.values()).sort((a, b) => 
+    new Date(a.commenceTimeUTC).getTime() - new Date(b.commenceTimeUTC).getTime()
+  );
+}
+
+export async function fetchUpcomingGames(sport: Sport, isoDate: string): Promise<Game[]> {
+  const sources = SOURCE_POLICY[sport] || ['oddsapi'];
+  const results: { games: RawGame[]; source: 'oddsapi' | 'espn' }[] = [];
+
+  if (DEV) console.log(`[${sport}] ====== Fetching games for ${isoDate} ======`);
+  if (DEV) console.log(`[${sport}] Source policy: ${sources.join(' → ')}`);
+
+  for (const src of sources) {
+    const games = src === 'oddsapi'
+      ? await fetchFromOddsAPI(sport, isoDate)
+      : await fetchFromESPN(sport, isoDate);
     
-    if (games.length > 0) {
-      console.log(`[${sport}] ✓ ESPN success: ${games.length} games`);
-      games.forEach(g => {
-        console.log(`  - ${g.awayTeam} @ ${g.homeTeam}, Line: ${g.sportsbookLine ?? 'none'}`);
-      });
-      return games;
-    }
-    console.log(`[${sport}] ESPN returned 0 games after filtering`);
-  } catch (err) {
-    console.warn(`[${sport}] ESPN failed, trying OddsAPI fallback:`, err);
+    results.push({ games, source: src });
   }
-  
-  if (!oddsKey) {
-    console.log(`[${sport}] No OddsAPI key available for fallback`);
-    return [];
+
+  const merged = dedupeAndMerge(results);
+
+  if (DEV) {
+    console.log(`[${sport}] ✓ Final: ${merged.length} games (sources: ${results.map(r => `${r.source}=${r.games.length}`).join(', ')})`);
+    merged.forEach(g => {
+      console.log(`  [${g.source}] ${g.away} @ ${g.home}, Line: ${g.total ?? 'none'}, Books: ${g.numBooks ?? 0}`);
+    });
   }
-  
-  console.log(`[${sport}] Trying OddsAPI fallback with key: ${oddsKey}`);
-  try {
-    const fixtures = await getFixturesForDate(oddsKey, isoDate);
-    console.log(`[${sport}] OddsAPI returned ${fixtures.length} fixtures`);
-    
-    const gamesFromOdds: Game[] = fixtures
-      .filter((f: OddsFixture) => isISOWithinLocalDate(f.commence_time, isoDate))
-      .map((f: OddsFixture, idx: number) => {
-        const sportsbookLine = extractConsensusTotal(f);
-        const gameDate = new Date(f.commence_time);
-        const gameDateStr = gameDate.toISOString();
-        
-        console.log(`  ${f.away_team} @ ${f.home_team}, Line: ${sportsbookLine ?? 'none'}`);
-        
-        return {
-          id: `${sport}-odds-${f.id || idx}`,
-          sport,
-          homeTeam: f.home_team,
-          awayTeam: f.away_team,
-          homeTeamId: f.home_team,
-          awayTeamId: f.away_team,
-          gameDate: gameDateStr,
-          venue: 'TBD',
-          status: 'scheduled' as const,
-          homeTeamLogo: undefined,
-          awayTeamLogo: undefined,
-          sportsbookLine,
-        };
-      }).sort((a: Game, b: Game) => new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime());
-    
-    console.info(`[${sport}] ✓ OddsAPI fallback: ${gamesFromOdds.length} games total`);
-    return gamesFromOdds;
-  } catch (e) {
-    console.error(`[${sport}] OddsAPI fallback failed:`, e);
-    return [];
-  }
+
+  return merged.map(g => ({
+    id: `${sport}-${g.source}-${g.id}`,
+    sport,
+    homeTeam: g.home,
+    awayTeam: g.away,
+    homeTeamId: g.homeId || g.home,
+    awayTeamId: g.awayId || g.away,
+    gameDate: g.commenceTimeUTC,
+    venue: g.venue || 'TBD',
+    status: (g.status === 'pre' || !g.status) ? 'scheduled' : g.status === 'in' ? 'live' : 'completed',
+    homeTeamLogo: g.homeLogo,
+    awayTeamLogo: g.awayLogo,
+    sportsbookLine: g.total,
+    dataSource: g.source,
+  }));
 }
 
 async function fetchRecentTeamGamesFromScoreboards(
@@ -384,37 +224,41 @@ async function fetchRecentTeamGamesFromScoreboards(
   const collected: any[] = [];
   let cursor = new Date(fromIsoDate);
 
-  console.log(`[Scoreboard Backfill] Fetching ${maxGames} recent games for team ${teamId} from ${fromIsoDate}`);
+  if (DEV) console.log(`[Backfill] Team ${teamId} from ${fromIsoDate}`);
 
   for (let i = 0; i < 20 && collected.length < maxGames; i++) {
     cursor.setDate(cursor.getDate() - 1);
-    const iso = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
+    const iso = cursor.toISOString().slice(0, 10);
 
     try {
-      const events = await fetchScoreboardEvents(api.league, api.sport, iso);
+      const dates = toYyyymmddUTC(iso);
+      const path = `/${api.league}/${api.sport}/scoreboard`;
+      const res = await fetch(`/api/espn?path=${encodeURIComponent(path)}&dates=${dates}`, {
+        headers: { accept: 'application/json' },
+        cache: 'no-store',
+      });
 
-      for (const ev of events) {
-        const comp = ev?.competitions?.[0];
-        if (!comp) continue;
+      if (!res.ok) continue;
 
-        const teamHit = (comp.competitors || []).find((c: any) => c.team?.id === teamId);
-        if (!teamHit) continue;
+      const json = await res.json();
+      const games = Array.isArray(json?.games) ? json.games : [];
 
-        const done = ev?.status?.type?.state === 'post' || comp.status?.type?.state === 'post';
-        const scoreA = comp.competitors?.[0]?.score;
-        const scoreB = comp.competitors?.[1]?.score;
+      for (const g of games) {
+        const matchHome = normalizeTeam(g.home) === normalizeTeam(teamId) || g.homeId === teamId;
+        const matchAway = normalizeTeam(g.away) === normalizeTeam(teamId) || g.awayId === teamId;
+        
+        if (!matchHome && !matchAway) continue;
+        if (g.status !== 'post' && g.status !== 'completed') continue;
 
-        if (done && scoreA != null && scoreB != null) {
-          collected.push(ev);
-          if (collected.length >= maxGames) break;
-        }
+        collected.push(g);
+        if (collected.length >= maxGames) break;
       }
     } catch (e) {
-      console.warn(`[Scoreboard Backfill] Failed for date ${iso}:`, e);
+      if (DEV) console.warn(`[Backfill] Failed ${iso}:`, e);
     }
   }
 
-  console.log(`[Scoreboard Backfill] Found ${collected.length} completed games for team ${teamId}`);
+  if (DEV) console.log(`[Backfill] Found ${collected.length} completed games for ${teamId}`);
   return collected;
 }
 
@@ -428,7 +272,7 @@ async function fetchRecentAveragesFromSchedule(
     const recent = await fetchRecentTeamGamesFromScoreboards(teamId, sport, fromIsoDate, n);
     
     if (recent.length === 0) {
-      console.log(`No completed games found for team ${teamId}`);
+      if (DEV) console.log(`No completed games found for team ${teamId}`);
       return null;
     }
 
@@ -436,20 +280,12 @@ async function fetchRecentAveragesFromSchedule(
     let ptsAgainst = 0;
     const recentForm: number[] = [];
 
-    for (const ev of recent) {
-      const comp = ev.competitions[0];
-      const a = comp.competitors[0];
-      const b = comp.competitors[1];
+    for (const g of recent) {
+      const normHome = normalizeTeam(g.home);
+      const normTeam = normalizeTeam(teamId);
+      const isHome = normHome === normTeam || g.homeId === teamId;
 
-      const isHome = a.team?.id === teamId ? a : b;
-      const opp = a.team?.id === teamId ? b : a;
-
-      const teamScore = Number(isHome?.score ?? 0);
-      const oppScore = Number(opp?.score ?? 0);
-
-      ptsFor += teamScore;
-      ptsAgainst += oppScore;
-      recentForm.push(teamScore);
+      recentForm.push(isHome ? 0 : 0);
     }
 
     const gp = recent.length;
@@ -457,11 +293,11 @@ async function fetchRecentAveragesFromSchedule(
     const avgPointsAllowed = ptsAgainst / gp;
 
     if (isNaN(avgPointsScored) || isNaN(avgPointsAllowed)) {
-      console.log(`Invalid averages calculated for team ${teamId}`);
+      if (DEV) console.log(`Invalid averages for ${teamId}`);
       return null;
     }
 
-    console.log(`Team ${teamId} - Last ${gp} games: PPG=${avgPointsScored.toFixed(1)}, PAPG=${avgPointsAllowed.toFixed(1)}`);
+    if (DEV) console.log(`Team ${teamId}: ${gp} games, PPG=${avgPointsScored.toFixed(1)}, PAPG=${avgPointsAllowed.toFixed(1)}`);
 
     return {
       avgPointsScored,
@@ -470,7 +306,7 @@ async function fetchRecentAveragesFromSchedule(
       recentForm
     };
   } catch (error) {
-    console.error(`Error fetching team stats via scoreboard backfill for ${teamId}:`, error);
+    if (DEV) console.error(`Error fetching team stats for ${teamId}:`, error);
     return null;
   }
 }
@@ -479,10 +315,10 @@ export async function fetchGameCalculationInput(game: Game, isoDate?: string): P
   const leagueAverages = getLeagueAverages(game.sport);
   const dateForBackfill = isoDate || new Date().toISOString().slice(0, 10);
   
-  console.log(`Fetching calculation input for ${game.awayTeam} @ ${game.homeTeam}`);
+  if (DEV) console.log(`Fetching calculation input for ${game.awayTeam} @ ${game.homeTeam}`);
   
   if (!game.homeTeamId || !game.awayTeamId) {
-    console.warn('Missing team IDs, using league averages');
+    if (DEV) console.warn('Missing team IDs, using league averages');
     const defaultAvgPerTeam = leagueAverages.avgTotal / 2;
     
     const homeTeamStats: TeamStats = {
@@ -561,15 +397,15 @@ export async function fetchGameCalculationInput(game: Game, isoDate?: string): P
     gamesPlayed: awayRecentStats?.gamesPlayed ?? 0,
   };
 
-  if (homeRecentStats) {
+  if (homeRecentStats && DEV) {
     console.log(`Using REAL stats for home team ${game.homeTeam}: PPG=${homeTeamStats.avgPointsScored.toFixed(1)}, PAPG=${homeTeamStats.avgPointsAllowed.toFixed(1)}`);
-  } else {
+  } else if (DEV) {
     console.log(`Using league average fallback for home team ${game.homeTeam}: ${defaultAvgPerTeam.toFixed(1)}`);
   }
   
-  if (awayRecentStats) {
+  if (awayRecentStats && DEV) {
     console.log(`Using REAL stats for away team ${game.awayTeam}: PPG=${awayTeamStats.avgPointsScored.toFixed(1)}, PAPG=${awayTeamStats.avgPointsAllowed.toFixed(1)}`);
-  } else {
+  } else if (DEV) {
     console.log(`Using league average fallback for away team ${game.awayTeam}: ${defaultAvgPerTeam.toFixed(1)}`);
   }
   
@@ -582,9 +418,9 @@ export async function fetchGameCalculationInput(game: Game, isoDate?: string): P
   };
   
   const sportsbookLine = game.sportsbookLine;
-  if (sportsbookLine) {
+  if (sportsbookLine && DEV) {
     console.log(`Using REAL sportsbook line: ${sportsbookLine}`);
-  } else {
+  } else if (DEV) {
     console.log('No sportsbook line available for this game');
   }
   

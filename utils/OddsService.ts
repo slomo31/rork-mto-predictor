@@ -108,15 +108,33 @@ const ALIASES: Record<string, string> = {
   'tcu': 'texas christian',
   'smu': 'southern methodist',
   'byu': 'brigham young',
+  'la rams': 'los angeles rams',
+  'la chargers': 'los angeles chargers',
+  'washington commanders': 'washington',
+  'arizona state': 'arizona st',
+  'boston college': 'boston coll',
+  'florida state': 'florida st',
+  'georgia tech': 'georgia tech',
+  'iowa state': 'iowa st',
+  'kansas state': 'kansas st',
+  'michigan state': 'michigan st',
+  'mississippi state': 'mississippi st',
+  'nc state': 'north carolina st',
+  'ohio state': 'ohio st',
+  'oklahoma state': 'oklahoma st',
+  'oregon state': 'oregon st',
+  'penn state': 'penn st',
+  'san diego state': 'san diego st',
+  'washington state': 'washington st',
 };
 
-function normName(s: string) {
+export function normalizeTeam(s: string): string {
   const t = (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   return ALIASES[t] ?? t;
 }
 
 function teamsMatch(aHome: string, aAway: string, bHome: string, bAway: string) {
-  const ah = normName(aHome), aa = normName(aAway), bh = normName(bHome), ba = normName(bAway);
+  const ah = normalizeTeam(aHome), aa = normalizeTeam(aAway), bh = normalizeTeam(bHome), ba = normalizeTeam(bAway);
   return (ah === bh && aa === ba) || (ah === ba && aa === bh);
 }
 
