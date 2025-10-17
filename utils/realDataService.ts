@@ -2,7 +2,7 @@ import { Game, Sport, TeamStats, GameContext, CalculationInput } from '@/types/s
 import { getLeagueAverages } from './mtoEngine';
 
 const CORS_PROXY = 'https://corsproxy.io/?';
-const ESPN_BASE_URL = 'https://site.api.espn.com/apis/v2/sports';
+const ESPN_BASE_URL = 'https://site.api.espn.com/apis/site/v2/sports';
 
 function getProxiedUrl(url: string): string {
   return `${CORS_PROXY}${encodeURIComponent(url)}`;
