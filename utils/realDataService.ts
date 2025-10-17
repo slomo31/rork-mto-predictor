@@ -1,7 +1,7 @@
 import { Game, Sport, TeamStats, GameContext, CalculationInput } from '@/types/sports';
 import { getLeagueAverages } from './mtoEngine';
 
-const ESPN_BASE_URL = 'https://site.api.espn.com/apis/site/v2/sports';
+const ESPN_BASE_URL = 'https://site.api.espn.com/apis/v2/sports';
 
 interface ESPNGame {
   id: string;
@@ -38,6 +38,22 @@ interface ESPNGame {
     odds?: Array<{
       details: string;
       overUnder: number;
+    }>;
+  }>;
+}
+
+interface ESPNScheduleEvent {
+  id: string;
+  date: string;
+  competitions?: Array<{
+    competitors: Array<{
+      id: string;
+      score?: string;
+      homeAway: 'home' | 'away';
+      team: {
+        id: string;
+        displayName: string;
+      };
     }>;
   }>;
 }
@@ -151,11 +167,11 @@ function convertESPNGameToGame(espnGame: ESPNGame, sport: Sport): Game | null {
       awayTeam: awayTeam.team.displayName,
       homeTeamId: homeTeam.team.id,
       awayTeamId: awayTeam.team.id,
-      gameDate: espnGame.date,
+      gameDate: espnGame.date || new Date().toISOString(),
       venue: competition.venue?.fullName || 'TBD',
       status,
-      homeTeamLogo: homeTeam.team.logo,
-      awayTeamLogo: awayTeam.team.logo,
+      homeTeamLogo: homeTeam.team.logo || undefined,
+      awayTeamLogo: awayTeam.team.logo || undefined,
       sportsbookLine,
     };
   } catch (error) {
@@ -182,112 +198,87 @@ export async function fetchUpcomingGames(sport: Sport): Promise<Game[]> {
   );
 }
 
-async function fetchTeamStatsFromESPN(teamId: string, sport: Sport): Promise<Partial<TeamStats> | null> {
+async function fetchRecentAveragesFromSchedule(
+  teamId: string,
+  sport: Sport,
+  n: number = 10
+): Promise<{ avgPointsScored: number; avgPointsAllowed: number; gamesPlayed: number; recentForm: number[] } | null> {
   const apiPath = SPORT_API_PATHS[sport];
   if (!apiPath) return null;
 
   try {
-    const url = `${ESPN_BASE_URL}/${apiPath.league}/${apiPath.sport}/teams/${teamId}`;
-    console.log(`Fetching team stats from: ${url}`);
+    const url = `${ESPN_BASE_URL}/${apiPath.league}/${apiPath.sport}/teams/${teamId}/schedule`;
+    console.log(`Fetching team schedule from: ${url}`);
+    
     const response = await fetch(url, {
       headers: { 'Accept': 'application/json' },
     });
     
     if (!response.ok) {
-      console.log(`Failed to fetch team stats: ${response.status}`);
+      console.log(`Failed to fetch team schedule: ${response.status}`);
       return null;
     }
 
     const data = await response.json();
     
-    if (!data.team || !data.team.record) {
-      console.log('No team record data available');
+    if (!data.events || data.events.length === 0) {
+      console.log(`No schedule events found for team ${teamId}`);
       return null;
     }
 
-    const stats = data.team.record?.items?.[0]?.stats || [];
-    
-    const ppg = stats.find((s: any) => 
-      s.name === 'pointsFor' || 
-      s.name === 'avgPointsFor' ||
-      s.name === 'pointsPerGame'
-    )?.value;
-    
-    const papg = stats.find((s: any) => 
-      s.name === 'pointsAgainst' || 
-      s.name === 'avgPointsAgainst' ||
-      s.name === 'pointsAllowedPerGame'
-    )?.value;
+    const completedGames: ESPNScheduleEvent[] = data.events
+      .filter((event: ESPNScheduleEvent) => {
+        const competition = event.competitions?.[0];
+        if (!competition) return false;
+        
+        const hasScores = competition.competitors.every(c => c.score !== undefined && c.score !== '');
+        return hasScores;
+      })
+      .slice(-n);
 
-    const gp = stats.find((s: any) => s.name === 'gamesPlayed')?.value;
+    if (completedGames.length === 0) {
+      console.log(`No completed games found for team ${teamId}`);
+      return null;
+    }
 
-    console.log(`Team ${teamId} stats - PPG: ${ppg}, PAPG: ${papg}, GP: ${gp}`);
+    const teamStats = completedGames.map(event => {
+      const competition = event.competitions![0];
+      const teamCompetitor = competition.competitors.find(c => c.team.id === teamId);
+      const opponentCompetitor = competition.competitors.find(c => c.team.id !== teamId);
+
+      if (!teamCompetitor || !opponentCompetitor) return null;
+
+      const teamScore = parseFloat(teamCompetitor.score || '0');
+      const opponentScore = parseFloat(opponentCompetitor.score || '0');
+
+      return { teamScore, opponentScore };
+    }).filter((stat): stat is { teamScore: number; opponentScore: number } => stat !== null);
+
+    if (teamStats.length === 0) {
+      console.log(`No valid stats extracted for team ${teamId}`);
+      return null;
+    }
+
+    const totalPointsScored = teamStats.reduce((sum, stat) => sum + stat.teamScore, 0);
+    const totalPointsAllowed = teamStats.reduce((sum, stat) => sum + stat.opponentScore, 0);
+    const gamesPlayed = teamStats.length;
+
+    const avgPointsScored = totalPointsScored / gamesPlayed;
+    const avgPointsAllowed = totalPointsAllowed / gamesPlayed;
+    const recentForm = teamStats.map(stat => stat.teamScore);
+
+    console.log(`Team ${teamId} - Last ${gamesPlayed} games: PPG=${avgPointsScored.toFixed(1)}, PAPG=${avgPointsAllowed.toFixed(1)}`);
 
     return {
-      avgPointsScored: ppg ? parseFloat(ppg) : undefined,
-      avgPointsAllowed: papg ? parseFloat(papg) : undefined,
-      gamesPlayed: gp ? parseInt(gp) : undefined,
+      avgPointsScored,
+      avgPointsAllowed,
+      gamesPlayed,
+      recentForm,
     };
   } catch (error) {
-    console.error(`Error fetching team stats for ${teamId}:`, error);
+    console.error(`Error fetching team schedule for ${teamId}:`, error);
     return null;
   }
-}
-
-function generateRecentForm(avg: number, variance: number, games: number): number[] {
-  return Array.from({ length: games }, () => 
-    Math.max(0, avg + (Math.random() - 0.5) * variance * 2)
-  );
-}
-
-function generateTeamStats(sport: Sport, teamName: string, teamId: string): TeamStats {
-  const leagueAvg = getLeagueAverages(sport);
-  const avgPerTeam = leagueAvg.avgTotal / 2;
-  
-  const variance = avgPerTeam * 0.3;
-  const avgScored = avgPerTeam + (Math.random() - 0.5) * variance * 2;
-  const avgAllowed = avgPerTeam + (Math.random() - 0.5) * variance * 2;
-  
-  return {
-    teamId,
-    teamName,
-    avgPointsScored: avgScored,
-    avgPointsAllowed: avgAllowed,
-    pace: leagueAvg.avgPace ? leagueAvg.avgPace * (0.85 + Math.random() * 0.3) : undefined,
-    offensiveEfficiency: leagueAvg.avgOffensiveEfficiency ? 
-      leagueAvg.avgOffensiveEfficiency * (0.8 + Math.random() * 0.4) : undefined,
-    defensiveEfficiency: leagueAvg.avgDefensiveEfficiency ?
-      leagueAvg.avgDefensiveEfficiency * (0.8 + Math.random() * 0.4) : undefined,
-    recentForm: generateRecentForm(avgScored, variance, 10),
-    gamesPlayed: Math.floor(5 + Math.random() * 25)
-  };
-}
-
-function generateGameContext(sport: Sport): GameContext {
-  const hasWeather = ['NFL', 'MLB', 'SOCCER', 'NCAA_FB'].includes(sport);
-  const indoor = Math.random() > 0.6;
-  
-  const injuries = Math.random() > 0.6 ? [
-    {
-      playerName: 'Key Player',
-      impact: Math.random() > 0.5 ? 'high' as const : 'medium' as const,
-      status: Math.random() > 0.5 ? 'out' as const : 'questionable' as const
-    }
-  ] : [];
-
-  return {
-    venue: Math.random() > 0.5 ? 'home' : 'away',
-    weather: hasWeather ? {
-      temperature: 40 + Math.random() * 45,
-      conditions: indoor ? 'Indoor' : (Math.random() > 0.7 ? 'Rain' : 'Clear'),
-      windSpeed: indoor ? 0 : Math.random() * 25,
-      precipitation: !indoor && Math.random() > 0.8,
-      indoor
-    } : undefined,
-    restDays: Math.floor(Math.random() * 5),
-    injuries,
-    travelDistance: Math.random() * 3000
-  };
 }
 
 export async function fetchGameCalculationInput(game: Game): Promise<CalculationInput> {
@@ -295,39 +286,56 @@ export async function fetchGameCalculationInput(game: Game): Promise<Calculation
   
   console.log(`Fetching calculation input for ${game.awayTeam} @ ${game.homeTeam}`);
   
-  const [homeStatsFromAPI, awayStatsFromAPI] = await Promise.all([
-    fetchTeamStatsFromESPN(game.homeTeamId, game.sport),
-    fetchTeamStatsFromESPN(game.awayTeamId, game.sport)
+  const [homeRecentStats, awayRecentStats] = await Promise.all([
+    fetchRecentAveragesFromSchedule(game.homeTeamId, game.sport, 10),
+    fetchRecentAveragesFromSchedule(game.awayTeamId, game.sport, 10)
   ]);
   
-  let homeTeamStats = generateTeamStats(game.sport, game.homeTeam, game.homeTeamId);
-  let awayTeamStats = generateTeamStats(game.sport, game.awayTeam, game.awayTeamId);
+  const defaultAvgPerTeam = leagueAverages.avgTotal / 2;
   
-  if (homeStatsFromAPI) {
-    console.log(`Using real stats for home team ${game.homeTeam}`);
-    homeTeamStats = {
-      ...homeTeamStats,
-      avgPointsScored: homeStatsFromAPI.avgPointsScored || homeTeamStats.avgPointsScored,
-      avgPointsAllowed: homeStatsFromAPI.avgPointsAllowed || homeTeamStats.avgPointsAllowed,
-      gamesPlayed: homeStatsFromAPI.gamesPlayed || homeTeamStats.gamesPlayed,
-    };
+  const homeTeamStats: TeamStats = {
+    teamId: game.homeTeamId,
+    teamName: game.homeTeam,
+    avgPointsScored: homeRecentStats?.avgPointsScored ?? defaultAvgPerTeam,
+    avgPointsAllowed: homeRecentStats?.avgPointsAllowed ?? defaultAvgPerTeam,
+    pace: leagueAverages.avgPace,
+    offensiveEfficiency: leagueAverages.avgOffensiveEfficiency,
+    defensiveEfficiency: leagueAverages.avgDefensiveEfficiency,
+    recentForm: homeRecentStats?.recentForm ?? [],
+    gamesPlayed: homeRecentStats?.gamesPlayed ?? 0,
+  };
+  
+  const awayTeamStats: TeamStats = {
+    teamId: game.awayTeamId,
+    teamName: game.awayTeam,
+    avgPointsScored: awayRecentStats?.avgPointsScored ?? defaultAvgPerTeam,
+    avgPointsAllowed: awayRecentStats?.avgPointsAllowed ?? defaultAvgPerTeam,
+    pace: leagueAverages.avgPace,
+    offensiveEfficiency: leagueAverages.avgOffensiveEfficiency,
+    defensiveEfficiency: leagueAverages.avgDefensiveEfficiency,
+    recentForm: awayRecentStats?.recentForm ?? [],
+    gamesPlayed: awayRecentStats?.gamesPlayed ?? 0,
+  };
+
+  if (homeRecentStats) {
+    console.log(`Using REAL stats for home team ${game.homeTeam}: PPG=${homeTeamStats.avgPointsScored.toFixed(1)}, PAPG=${homeTeamStats.avgPointsAllowed.toFixed(1)}`);
   } else {
-    console.log(`Using estimated stats for home team ${game.homeTeam}`);
+    console.log(`Using league average fallback for home team ${game.homeTeam}: ${defaultAvgPerTeam.toFixed(1)}`);
   }
   
-  if (awayStatsFromAPI) {
-    console.log(`Using real stats for away team ${game.awayTeam}`);
-    awayTeamStats = {
-      ...awayTeamStats,
-      avgPointsScored: awayStatsFromAPI.avgPointsScored || awayTeamStats.avgPointsScored,
-      avgPointsAllowed: awayStatsFromAPI.avgPointsAllowed || awayTeamStats.avgPointsAllowed,
-      gamesPlayed: awayStatsFromAPI.gamesPlayed || awayTeamStats.gamesPlayed,
-    };
+  if (awayRecentStats) {
+    console.log(`Using REAL stats for away team ${game.awayTeam}: PPG=${awayTeamStats.avgPointsScored.toFixed(1)}, PAPG=${awayTeamStats.avgPointsAllowed.toFixed(1)}`);
   } else {
-    console.log(`Using estimated stats for away team ${game.awayTeam}`);
+    console.log(`Using league average fallback for away team ${game.awayTeam}: ${defaultAvgPerTeam.toFixed(1)}`);
   }
   
-  const gameContext = generateGameContext(game.sport);
+  const gameContext: GameContext = {
+    venue: 'home',
+    restDays: 3,
+    injuries: [],
+    travelDistance: undefined,
+    weather: undefined,
+  };
   
   const sportsbookLine = game.sportsbookLine;
   if (sportsbookLine) {
