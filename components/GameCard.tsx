@@ -8,10 +8,11 @@ import { MarketVsModel } from './MarketVsModel';
 
 interface GameCardProps {
   game: Game;
+  isoDate?: string;
 }
 
-export default function GameCard({ game }: GameCardProps) {
-  const { data: prediction, isLoading } = useGamePrediction(game);
+export default function GameCard({ game, isoDate }: GameCardProps) {
+  const { data: prediction, isLoading } = useGamePrediction(game, isoDate);
   const [showDetails, setShowDetails] = useState(false);
 
   const sportInfo = SPORT_INFO[game.sport];

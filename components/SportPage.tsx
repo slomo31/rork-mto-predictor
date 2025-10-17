@@ -18,14 +18,15 @@ export default function SportPage({ sports, title, subtitle }: SportPageProps) {
   const insets = useSafeAreaInsets();
   const [dateFilter, setDateFilter] = useState<string>('all');
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
 
   const gamesQuery = useQuery({
-    queryKey: ['games', ...sports],
+    queryKey: ['games', ...sports, selectedDate],
     queryFn: async () => {
-      console.log(`Fetching games for sports: ${sports.join(', ')}`);
+      console.log(`Fetching games for sports: ${sports.join(', ')} on ${selectedDate}`);
       const allGames: Game[] = [];
       for (const sport of sports) {
-        const games = await fetchUpcomingGames(sport);
+        const games = await fetchUpcomingGames(sport, selectedDate);
         console.log(`Got ${games.length} games for ${sport}`);
         allGames.push(...games);
       }
@@ -71,6 +72,18 @@ export default function SportPage({ sports, title, subtitle }: SportPageProps) {
     return gamesQuery.data;
   })();
 
+  const handleDateFilterChange = (value: string) => {
+    setDateFilter(value);
+    const today = new Date();
+    if (value === 'today') {
+      setSelectedDate(today.toISOString().split('T')[0]);
+    } else if (value === 'tomorrow') {
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      setSelectedDate(tomorrow.toISOString().split('T')[0]);
+    }
+  };
+
   const dateFilters = [
     { value: 'all', label: 'All Games' },
     { value: 'today', label: 'Today' },
@@ -103,7 +116,7 @@ export default function SportPage({ sports, title, subtitle }: SportPageProps) {
               styles.dateFilterChip,
               dateFilter === filter.value && styles.dateFilterChipActive
             ]}
-            onPress={() => setDateFilter(filter.value)}
+            onPress={() => handleDateFilterChange(filter.value)}
           >
             <Text style={[
               styles.dateFilterText,
@@ -136,7 +149,7 @@ export default function SportPage({ sports, title, subtitle }: SportPageProps) {
         <FlatList
           data={filteredGames}
           keyExtractor={item => item.id}
-          renderItem={({ item }) => <GameCard game={item} />}
+          renderItem={({ item }) => <GameCard game={item} isoDate={selectedDate} />}
           contentContainerStyle={styles.listContent}
           refreshControl={
             <RefreshControl

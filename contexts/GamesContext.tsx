@@ -10,13 +10,14 @@ const ALL_SPORTS: Sport[] = ['NFL', 'NBA', 'NHL', 'MLB', 'NCAA_FB', 'NCAA_BB', '
 export const [GamesProvider, useGames] = createContextHook(() => {
   const [selectedSports, setSelectedSports] = useState<Sport[]>(ALL_SPORTS);
   const [dateFilter, setDateFilter] = useState<string>('all');
+  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
 
   const gamesQuery = useQuery({
-    queryKey: ['games', selectedSports],
+    queryKey: ['games', selectedSports, selectedDate],
     queryFn: async () => {
       const allGames: Game[] = [];
       for (const sport of selectedSports) {
-        const games = await fetchUpcomingGames(sport);
+        const games = await fetchUpcomingGames(sport, selectedDate);
         allGames.push(...games);
       }
       return allGames.sort((a, b) => new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime());
@@ -78,27 +79,30 @@ export const [GamesProvider, useGames] = createContextHook(() => {
     selectAllSports,
     dateFilter,
     setDateFilter,
+    selectedDate,
+    setSelectedDate,
     allSports: ALL_SPORTS,
     refetch: gamesQuery.refetch
-  }), [filteredGames, gamesQuery.isLoading, gamesQuery.error, selectedSports, toggleSport, selectAllSports, dateFilter, gamesQuery.refetch]);
+  }), [filteredGames, gamesQuery.isLoading, gamesQuery.error, selectedSports, toggleSport, selectAllSports, dateFilter, selectedDate, gamesQuery.refetch]);
 });
 
 const predictionCache = new Map<string, { ts: number; data: MTOPrediction }>();
 const PREDICTION_CACHE_TTL = 5 * 60 * 1000;
 
-export function useGamePrediction(game: Game) {
+export function useGamePrediction(game: Game, isoDate?: string) {
   return useQuery({
-    queryKey: ['prediction', game.id, game],
+    queryKey: ['prediction', game.id, game, isoDate],
     queryFn: async (): Promise<MTOPrediction> => {
       const now = Date.now();
-      const cached = predictionCache.get(game.id);
+      const cacheKey = `${game.id}-${isoDate || 'default'}`;
+      const cached = predictionCache.get(cacheKey);
       if (cached && now - cached.ts < PREDICTION_CACHE_TTL) {
         return cached.data;
       }
 
-      const input = await fetchGameCalculationInput(game);
+      const input = await fetchGameCalculationInput(game, isoDate);
       const prediction = await calculateMTO(input, game.homeTeam, game.awayTeam);
-      predictionCache.set(game.id, { ts: now, data: prediction });
+      predictionCache.set(cacheKey, { ts: now, data: prediction });
       return prediction;
     },
     staleTime: 10 * 60 * 1000,

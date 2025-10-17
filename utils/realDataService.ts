@@ -189,15 +189,15 @@ function convertESPNGameToGame(espnGame: ESPNGame, sport: Sport): Game | null {
   }
 }
 
-export async function fetchUpcomingGames(sport: Sport): Promise<Game[]> {
+export async function fetchUpcomingGames(sport: Sport, isoDate?: string): Promise<Game[]> {
   try {
     const api = SPORT_API_PATHS[sport];
     if (!api) return [];
     
-    const today = new Date().toISOString().split('T')[0];
-    console.log(`[${sport}] Fetching games for ${today}`);
+    const targetDate = isoDate || new Date().toISOString().split('T')[0];
+    console.log(`[${sport}] Fetching games for ${targetDate}`);
     
-    const events = await fetchScoreboard(api.league, api.sport, today);
+    const events = await fetchScoreboard(api.league, api.sport, targetDate);
     const games = (events || [])
       .map((e: any) => convertESPNGameToGame(e, sport))
       .filter((g): g is Game => !!g)
@@ -212,87 +212,112 @@ export async function fetchUpcomingGames(sport: Sport): Promise<Game[]> {
   }
 }
 
+async function fetchRecentTeamGamesFromScoreboards(
+  teamId: string,
+  sport: Sport,
+  fromIsoDate: string,
+  maxGames = 10
+): Promise<any[]> {
+  const api = SPORT_API_PATHS[sport];
+  if (!api) return [];
+
+  const collected: any[] = [];
+  let cursor = new Date(fromIsoDate);
+
+  console.log(`[Scoreboard Backfill] Fetching ${maxGames} recent games for team ${teamId} from ${fromIsoDate}`);
+
+  for (let i = 0; i < 20 && collected.length < maxGames; i++) {
+    cursor.setDate(cursor.getDate() - 1);
+    const iso = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
+
+    try {
+      const events = await fetchScoreboard(api.league, api.sport, iso);
+
+      for (const ev of events) {
+        const comp = ev?.competitions?.[0];
+        if (!comp) continue;
+
+        const teamHit = (comp.competitors || []).find((c: any) => c.team?.id === teamId);
+        if (!teamHit) continue;
+
+        const done = ev?.status?.type?.state === 'post' || comp.status?.type?.state === 'post';
+        const scoreA = comp.competitors?.[0]?.score;
+        const scoreB = comp.competitors?.[1]?.score;
+
+        if (done && scoreA != null && scoreB != null) {
+          collected.push(ev);
+          if (collected.length >= maxGames) break;
+        }
+      }
+    } catch (e) {
+      console.warn(`[Scoreboard Backfill] Failed for date ${iso}:`, e);
+    }
+  }
+
+  console.log(`[Scoreboard Backfill] Found ${collected.length} completed games for team ${teamId}`);
+  return collected;
+}
+
 async function fetchRecentAveragesFromSchedule(
   teamId: string,
   sport: Sport,
+  fromIsoDate: string,
   n: number = 10
 ): Promise<{ avgPointsScored: number; avgPointsAllowed: number; gamesPlayed: number; recentForm: number[] } | null> {
-  const apiPath = SPORT_API_PATHS[sport];
-  if (!apiPath) return null;
-
   try {
-    const upstream = `${ESPN_BASE}/${apiPath.league}/${apiPath.sport}/teams/${teamId}/schedule`;
-    console.log(`Fetching team schedule for ${teamId}`);
+    const recent = await fetchRecentTeamGamesFromScoreboards(teamId, sport, fromIsoDate, n);
     
-    const data = await fetchJSONViaProxies(upstream);
-    
-    if (!data.events || data.events.length === 0) {
-      console.log(`No schedule events found for team ${teamId}`);
-      return null;
-    }
-
-    const completedGames: ESPNScheduleEvent[] = data.events
-      .filter((event: ESPNScheduleEvent) => {
-        const competition = event.competitions?.[0];
-        if (!competition) return false;
-        
-        const hasScores = competition.competitors.every(c => c.score !== undefined && c.score !== '');
-        return hasScores;
-      })
-      .slice(-n);
-
-    if (completedGames.length === 0) {
+    if (recent.length === 0) {
       console.log(`No completed games found for team ${teamId}`);
       return null;
     }
 
-    const teamStats = completedGames.map(event => {
-      const competition = event.competitions![0];
-      const teamCompetitor = competition.competitors.find(c => c.team.id === teamId);
-      const opponentCompetitor = competition.competitors.find(c => c.team.id !== teamId);
+    let ptsFor = 0;
+    let ptsAgainst = 0;
+    const recentForm: number[] = [];
 
-      if (!teamCompetitor || !opponentCompetitor) return null;
+    for (const ev of recent) {
+      const comp = ev.competitions[0];
+      const a = comp.competitors[0];
+      const b = comp.competitors[1];
 
-      const teamScore = parseFloat(teamCompetitor.score || '0');
-      const opponentScore = parseFloat(opponentCompetitor.score || '0');
+      const isHome = a.team?.id === teamId ? a : b;
+      const opp = a.team?.id === teamId ? b : a;
 
-      return { teamScore, opponentScore };
-    }).filter((stat): stat is { teamScore: number; opponentScore: number } => stat !== null);
+      const teamScore = Number(isHome?.score ?? 0);
+      const oppScore = Number(opp?.score ?? 0);
 
-    if (teamStats.length === 0) {
-      console.log(`No valid stats extracted for team ${teamId}`);
-      return null;
+      ptsFor += teamScore;
+      ptsAgainst += oppScore;
+      recentForm.push(teamScore);
     }
 
-    const totalPointsScored = teamStats.reduce((sum, stat) => sum + stat.teamScore, 0);
-    const totalPointsAllowed = teamStats.reduce((sum, stat) => sum + stat.opponentScore, 0);
-    const gamesPlayed = teamStats.length;
-
-    const avgPointsScored = totalPointsScored / gamesPlayed;
-    const avgPointsAllowed = totalPointsAllowed / gamesPlayed;
-    const recentForm = teamStats.map(stat => stat.teamScore);
+    const gp = recent.length;
+    const avgPointsScored = ptsFor / gp;
+    const avgPointsAllowed = ptsAgainst / gp;
 
     if (isNaN(avgPointsScored) || isNaN(avgPointsAllowed)) {
       console.log(`Invalid averages calculated for team ${teamId}`);
       return null;
     }
 
-    console.log(`Team ${teamId} - Last ${gamesPlayed} games: PPG=${avgPointsScored.toFixed(1)}, PAPG=${avgPointsAllowed.toFixed(1)}`);
+    console.log(`Team ${teamId} - Last ${gp} games: PPG=${avgPointsScored.toFixed(1)}, PAPG=${avgPointsAllowed.toFixed(1)}`);
 
     return {
       avgPointsScored,
       avgPointsAllowed,
-      gamesPlayed,
-      recentForm,
+      gamesPlayed: gp,
+      recentForm
     };
   } catch (error) {
-    console.error(`Error fetching team schedule for ${teamId}:`, error);
+    console.error(`Error fetching team stats via scoreboard backfill for ${teamId}:`, error);
     return null;
   }
 }
 
-export async function fetchGameCalculationInput(game: Game): Promise<CalculationInput> {
+export async function fetchGameCalculationInput(game: Game, isoDate?: string): Promise<CalculationInput> {
   const leagueAverages = getLeagueAverages(game.sport);
+  const dateForBackfill = isoDate || new Date().toISOString().slice(0, 10);
   
   console.log(`Fetching calculation input for ${game.awayTeam} @ ${game.homeTeam}`);
   
@@ -341,8 +366,8 @@ export async function fetchGameCalculationInput(game: Game): Promise<Calculation
   }
   
   const [homeRecentStats, awayRecentStats] = await Promise.all([
-    fetchRecentAveragesFromSchedule(game.homeTeamId, game.sport, 10),
-    fetchRecentAveragesFromSchedule(game.awayTeamId, game.sport, 10)
+    fetchRecentAveragesFromSchedule(game.homeTeamId, game.sport, dateForBackfill, 10),
+    fetchRecentAveragesFromSchedule(game.awayTeamId, game.sport, dateForBackfill, 10)
   ]);
   
   const defaultAvgPerTeam = leagueAverages.avgTotal / 2;
