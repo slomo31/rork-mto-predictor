@@ -1,53 +1,50 @@
 import { Game, Sport, TeamStats, GameContext, CalculationInput } from '@/types/sports';
 import { getLeagueAverages } from './mtoEngine';
-import { Platform } from 'react-native';
-
-const PROXY_BASE = '/api/fetch';
 
 const ESPN_BASES = [
-  'https://site.api.espn.com/apis/site/v2/sports'
+  'https://site.api.espn.com/apis/site/v2/sports',
+  'https://site.api.espn.com/apis/v2/sports'
 ];
 
 async function tryFetch(path: string): Promise<Response | null> {
   for (const base of ESPN_BASES) {
     try {
       const fullUrl = `${base}${path}`;
-      const proxyUrl = Platform.OS === 'web' 
-        ? `${PROXY_BASE}?url=${encodeURIComponent(fullUrl)}`
-        : fullUrl;
       
       console.log(`Trying: ${fullUrl}`);
-      const response = await fetch(proxyUrl, {
+      
+      const response = await fetch(fullUrl, {
         headers: {
           'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         },
       });
       
+      console.log(`Response status: ${response.status}`);
+      
+      if (!response.ok) {
+        console.log(`✗ Non-200 response from ${base}: ${response.status}`);
+        continue;
+      }
+      
       const contentType = response.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
-        try {
-          const clonedResponse = response.clone();
-          const testData = await clonedResponse.json();
-          
-          if (testData.error) {
-            console.log(`✗ Proxy returned error for ${base}:`, testData.error, `(status: ${testData.status || response.status})`);
-            continue;
-          }
-          
-          if (response.ok && testData.events !== undefined) {
-            console.log(`✓ Success with base: ${base}`);
-            return response;
-          } else if (response.ok) {
-            console.log(`✓ Valid JSON response from ${base}`);
-            return response;
-          } else {
-            console.log(`✗ Non-200 response from ${base}: ${response.status}`);
-          }
-        } catch (e) {
-          console.log(`✗ Invalid JSON from ${base}:`, e);
+      if (!contentType || !contentType.includes('application/json')) {
+        console.log(`✗ Non-JSON response from ${base}`);
+        continue;
+      }
+      
+      try {
+        const clonedResponse = response.clone();
+        const testData = await clonedResponse.json();
+        
+        if (testData.events !== undefined || testData.team !== undefined) {
+          console.log(`✓ Success with base: ${base}`);
+          return response;
+        } else {
+          console.log(`✗ Unexpected response structure from ${base}`);
         }
-      } else {
-        console.log(`✗ Non-JSON response from ${base} (${response.status})`);
+      } catch (e) {
+        console.log(`✗ Invalid JSON from ${base}:`, e);
       }
     } catch (error) {
       console.log(`✗ Network error with base ${base}:`, error);
