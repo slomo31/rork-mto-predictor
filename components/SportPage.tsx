@@ -44,43 +44,16 @@ export default function SportPage({ sports, title, subtitle }: SportPageProps) {
     setRefreshing(false);
   };
 
-  const filteredGames = (() => {
-    if (!gamesQuery.data) return [];
-    
-    if (dateFilter === 'all') return gamesQuery.data;
-    
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    if (dateFilter === 'today') {
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      return gamesQuery.data.filter(game => {
-        const gameDate = new Date(game.gameDate);
-        return gameDate >= today && gameDate < tomorrow;
-      });
-    }
-    
-    if (dateFilter === 'tomorrow') {
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const dayAfter = new Date(tomorrow);
-      dayAfter.setDate(dayAfter.getDate() + 1);
-      return gamesQuery.data.filter(game => {
-        const gameDate = new Date(game.gameDate);
-        return gameDate >= tomorrow && gameDate < dayAfter;
-      });
-    }
-    
-    return gamesQuery.data;
-  })();
+  const filteredGames = gamesQuery.data || [];
 
   const handleDateFilterChange = (value: string) => {
     setDateFilter(value);
     if (value === 'today') {
       setSelectedDate(toISODateLocal());
     } else if (value === 'tomorrow') {
-      setSelectedDate(addDaysISO(toISODateLocal(), 1));
+      const tomorrowDate = addDaysISO(toISODateLocal(), 1);
+      console.log(`Setting tomorrow date to: ${tomorrowDate}`);
+      setSelectedDate(tomorrowDate);
     }
   };
 
