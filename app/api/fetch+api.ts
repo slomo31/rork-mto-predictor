@@ -1,3 +1,17 @@
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timeout);
+    return response;
+  } catch (error) {
+    clearTimeout(timeout);
+    throw error;
+  }
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const targetUrl = url.searchParams.get('url');
@@ -9,15 +23,14 @@ export async function GET(request: Request) {
   console.log(`[Proxy] Fetching: ${targetUrl}`);
 
   try {
-    const response = await fetch(targetUrl, {
+    const response = await fetchWithTimeout(targetUrl, {
       headers: {
         'Accept': 'application/json',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://www.espn.com/',
-        'Origin': 'https://www.espn.com',
       },
-    });
+      cache: 'no-store',
+    }, 8000);
 
     console.log(`[Proxy] Response status: ${response.status}`);
 
@@ -46,8 +59,14 @@ export async function GET(request: Request) {
     const eventCount = data.events?.length || 0;
     console.log(`[Proxy] Success - returned ${eventCount} events`);
     return Response.json(data);
-  } catch (error) {
+  } catch (error: any) {
     console.error('[Proxy] Fetch error:', error);
+    if (error.name === 'AbortError') {
+      return Response.json(
+        { error: 'Request timeout', details: 'ESPN API took too long to respond' },
+        { status: 504 }
+      );
+    }
     return Response.json(
       { error: 'Failed to fetch from upstream', details: String(error) },
       { status: 502 }

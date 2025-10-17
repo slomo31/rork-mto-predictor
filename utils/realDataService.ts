@@ -1,62 +1,80 @@
 import { Game, Sport, TeamStats, GameContext, CalculationInput } from '@/types/sports';
 import { getLeagueAverages } from './mtoEngine';
+import * as mockDataService from './mockDataService';
 
 const ESPN_BASES = [
   'https://site.api.espn.com/apis/site/v2/sports',
-  'https://site.api.espn.com/apis/v2/sports'
+  'https://sports.core.api.espn.com/v2/sports'
 ];
 
 async function tryFetch(path: string): Promise<Response | null> {
-  for (const base of ESPN_BASES) {
+  for (let attempt = 0; attempt < ESPN_BASES.length; attempt++) {
+    const base = ESPN_BASES[attempt];
     try {
       const fullUrl = `${base}${path}`;
       const proxyUrl = `/api/fetch?url=${encodeURIComponent(fullUrl)}`;
       
-      console.log(`[realDataService] Trying via proxy: ${fullUrl}`);
+      console.log(`[realDataService] Attempt ${attempt + 1}/${ESPN_BASES.length}: ${fullUrl}`);
       
-      const response = await fetch(proxyUrl, {
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
-      
-      console.log(`[realDataService] Proxy response status: ${response.status}`);
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        console.log(`✗ Non-200 response from ${base}: ${response.status}`, errorData);
-        continue;
-      }
-      
-      const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        console.log(`✗ Non-JSON response from ${base}`);
-        continue;
-      }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 7000);
       
       try {
-        const clonedResponse = response.clone();
-        const testData = await clonedResponse.json();
+        const response = await fetch(proxyUrl, {
+          headers: {
+            'Accept': 'application/json',
+          },
+          signal: controller.signal,
+          cache: 'no-store',
+        });
         
-        if (testData.error) {
-          console.log(`✗ Proxy returned error from ${base}:`, testData.error);
+        clearTimeout(timeout);
+        console.log(`[realDataService] Proxy response status: ${response.status}`);
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+          console.log(`✗ Non-200 response from ${base}: ${response.status}`, errorData);
           continue;
         }
         
-        if (testData.events !== undefined || testData.team !== undefined) {
-          console.log(`✓ Success with base: ${base}`);
-          return response;
-        } else {
-          console.log(`✗ Unexpected response structure from ${base}`);
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          console.log(`✗ Non-JSON response from ${base}`);
+          continue;
         }
-      } catch (e) {
-        console.log(`✗ Invalid JSON from ${base}:`, e);
+        
+        try {
+          const clonedResponse = response.clone();
+          const testData = await clonedResponse.json();
+          
+          if (testData.error) {
+            console.log(`✗ Proxy returned error from ${base}:`, testData.error);
+            continue;
+          }
+          
+          if (testData.events !== undefined || testData.team !== undefined) {
+            console.log(`✓ Success with base: ${base}`);
+            return response;
+          } else {
+            console.log(`✗ Unexpected response structure from ${base}`);
+          }
+        } catch (e) {
+          console.log(`✗ Invalid JSON from ${base}:`, e);
+        }
+      } catch (error: any) {
+        clearTimeout(timeout);
+        if (error.name === 'AbortError') {
+          console.log(`✗ Request timeout with ${base}`);
+        } else {
+          console.log(`✗ Network error with base ${base}:`, error);
+        }
       }
     } catch (error) {
-      console.log(`✗ Network error with base ${base}:`, error);
+      console.log(`✗ Unexpected error with base ${base}:`, error);
     }
   }
   
+  console.error(`[realDataService] All ${ESPN_BASES.length} base URLs failed for path: ${path}`);
   return null;
 }
 
@@ -133,10 +151,20 @@ function formatDateYYYYMMDD(date: Date): string {
   return `${year}${month}${day}`;
 }
 
+let espnApiFailing = false;
+let lastEspnCheck = 0;
+const ESPN_CHECK_INTERVAL = 60000;
+
 async function fetchESPNGames(sport: Sport): Promise<ESPNGame[]> {
   const apiPath = SPORT_API_PATHS[sport];
   if (!apiPath) {
     console.log(`No API path configured for ${sport}`);
+    return [];
+  }
+
+  const now = Date.now();
+  if (espnApiFailing && now - lastEspnCheck < ESPN_CHECK_INTERVAL) {
+    console.log(`Skipping ESPN API (known to be failing, retry in ${Math.round((ESPN_CHECK_INTERVAL - (now - lastEspnCheck)) / 1000)}s)`);
     return [];
   }
 
@@ -151,9 +179,12 @@ async function fetchESPNGames(sport: Sport): Promise<ESPNGame[]> {
     
     if (!response) {
       console.error(`All ESPN API attempts failed for ${sport}`);
+      espnApiFailing = true;
+      lastEspnCheck = now;
       return [];
     }
 
+    espnApiFailing = false;
     const data = await response.json();
     console.log(`ESPN API returned ${data.events?.length || 0} events for ${sport} on ${dateStr}`);
     
@@ -186,6 +217,8 @@ async function fetchESPNGames(sport: Sport): Promise<ESPNGame[]> {
     return data.events || [];
   } catch (error) {
     console.error(`Error fetching ${sport} games:`, error);
+    espnApiFailing = true;
+    lastEspnCheck = now;
     return [];
   }
 }
@@ -255,6 +288,11 @@ export async function fetchUpcomingGames(sport: Sport): Promise<Game[]> {
     .filter(game => game.status === 'scheduled' || game.status === 'live');
 
   console.log(`Converted to ${games.length} valid games for ${sport}`);
+  
+  if (games.length === 0) {
+    console.warn(`ESPN API failed for ${sport}, falling back to mock data`);
+    return mockDataService.fetchUpcomingGames(sport);
+  }
   
   return games.sort((a, b) => 
     new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime()
@@ -351,6 +389,11 @@ export async function fetchGameCalculationInput(game: Game): Promise<Calculation
   const leagueAverages = getLeagueAverages(game.sport);
   
   console.log(`Fetching calculation input for ${game.awayTeam} @ ${game.homeTeam}`);
+  
+  if (espnApiFailing || !game.homeTeamId || !game.awayTeamId) {
+    console.warn('ESPN API unavailable or missing team IDs, using mock data for calculation input');
+    return mockDataService.fetchGameCalculationInput(game);
+  }
   
   const [homeRecentStats, awayRecentStats] = await Promise.all([
     fetchRecentAveragesFromSchedule(game.homeTeamId, game.sport, 10),
