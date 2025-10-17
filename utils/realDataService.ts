@@ -1,6 +1,7 @@
 import { Game, Sport, TeamStats, GameContext, CalculationInput } from '@/types/sports';
 import { getLeagueAverages } from './mtoEngine';
 import { getFixturesForDate, extractConsensusTotal, type OddsFixture } from '@/utils/OddsService';
+import { toYyyymmddUTC, isISOWithinLocalDate } from '@/utils/date';
 
 const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports';
 
@@ -129,22 +130,23 @@ const ODDSAPI_SPORT_KEYS: Partial<Record<Sport, string>> = {
   SOCCER: 'soccer_usa_mls',
 };
 
-function toYyyymmddUTC(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number);
-  const dt = new Date(Date.UTC(y!, m! - 1, d!));
-  return `${dt.getUTCFullYear()}${String(dt.getUTCMonth() + 1).padStart(2, '0')}${String(dt.getUTCDate()).padStart(2, '0')}`;
-}
-
-async function fetchScoreboard(league: string, sport: string, isoDate: string) {
+async function fetchScoreboardEvents(league: string, sport: string, isoDate: string) {
   const dates = toYyyymmddUTC(isoDate);
   const upstream = `${ESPN_BASE}/${league}/${sport}/scoreboard?dates=${dates}`;
   const json = await fetchJSONViaProxies(upstream);
   
   if (!json || !Array.isArray(json.events)) {
-    throw new Error('No events array in response');
+    return [];
   }
   
   return json.events;
+}
+
+function filterToLocalDay(events: any[], isoDate: string) {
+  return (events || []).filter(ev => {
+    const dt = ev?.date ?? ev?.competitions?.[0]?.date;
+    return dt ? isISOWithinLocalDate(dt, isoDate) : true;
+  });
 }
 
 function convertESPNGameToGame(espnGame: ESPNGame, sport: Sport): Game | null {
@@ -200,15 +202,15 @@ function convertESPNGameToGame(espnGame: ESPNGame, sport: Sport): Game | null {
   }
 }
 
-export async function fetchUpcomingGames(sport: Sport, isoDate?: string): Promise<Game[]> {
+export async function fetchUpcomingGames(sport: Sport, isoDate: string): Promise<Game[]> {
   const api = SPORT_API_PATHS[sport];
   if (!api) return [];
   
-  const targetDate = isoDate || new Date().toISOString().split('T')[0];
-  console.log(`[${sport}] Fetching games for ${targetDate}`);
+  console.log(`[${sport}] Fetching games for ${isoDate}`);
   
   try {
-    const events = await fetchScoreboard(api.league, api.sport, targetDate);
+    const rawEvents = await fetchScoreboardEvents(api.league, api.sport, isoDate);
+    const events = filterToLocalDay(rawEvents, isoDate);
     const games = (events || [])
       .map((e: any) => convertESPNGameToGame(e, sport))
       .filter((g: any): g is Game => !!g)
@@ -230,24 +232,26 @@ export async function fetchUpcomingGames(sport: Sport, isoDate?: string): Promis
   }
   
   try {
-    const fixtures = await getFixturesForDate(oddsKey, targetDate);
-    const gamesFromOdds: Game[] = fixtures.map((f: OddsFixture, idx: number) => {
-      const sportsbookLine = extractConsensusTotal(f);
-      return {
-        id: `${sport}-odds-${f.id || idx}`,
-        sport,
-        homeTeam: f.home_team,
-        awayTeam: f.away_team,
-        homeTeamId: f.home_team,
-        awayTeamId: f.away_team,
-        gameDate: f.commence_time,
-        venue: 'TBD',
-        status: 'scheduled' as const,
-        homeTeamLogo: undefined,
-        awayTeamLogo: undefined,
-        sportsbookLine,
-      };
-    }).sort((a: Game, b: Game) => new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime());
+    const fixtures = await getFixturesForDate(oddsKey, isoDate);
+    const gamesFromOdds: Game[] = fixtures
+      .filter(f => isISOWithinLocalDate(f.commence_time, isoDate))
+      .map((f: OddsFixture, idx: number) => {
+        const sportsbookLine = extractConsensusTotal(f);
+        return {
+          id: `${sport}-odds-${f.id || idx}`,
+          sport,
+          homeTeam: f.home_team,
+          awayTeam: f.away_team,
+          homeTeamId: f.home_team,
+          awayTeamId: f.away_team,
+          gameDate: f.commence_time,
+          venue: 'TBD',
+          status: 'scheduled' as const,
+          homeTeamLogo: undefined,
+          awayTeamLogo: undefined,
+          sportsbookLine,
+        };
+      }).sort((a: Game, b: Game) => new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime());
     
     console.info(`[${sport}] OddsAPI fallback used — ${gamesFromOdds.length} games`);
     return gamesFromOdds;
@@ -276,7 +280,7 @@ async function fetchRecentTeamGamesFromScoreboards(
     const iso = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
 
     try {
-      const events = await fetchScoreboard(api.league, api.sport, iso);
+      const events = await fetchScoreboardEvents(api.league, api.sport, iso);
 
       for (const ev of events) {
         const comp = ev?.competitions?.[0];
