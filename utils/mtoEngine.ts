@@ -33,8 +33,14 @@ export function calculateMTO(input: CalculationInput): MTOPrediction {
     awayTeamStats.recentForm.slice(-5).reduce((sum, val) => sum + val, 0) / Math.min(5, awayTeamStats.recentForm.length) : 
     awayAvgScored;
 
-  const homeExpected = (homeRecentAvg * 0.6 + homeAvgScored * 0.4);
-  const awayExpected = (awayRecentAvg * 0.6 + awayAvgScored * 0.4);
+  const homeExpectedOffense = homeRecentAvg * 0.6 + homeAvgScored * 0.4;
+  const awayExpectedOffense = awayRecentAvg * 0.6 + awayAvgScored * 0.4;
+  
+  const homeExpectedDefense = homeAvgAllowed;
+  const awayExpectedDefense = awayAvgAllowed;
+  
+  const homeExpected = (homeExpectedOffense * 0.6 + awayExpectedDefense * 0.4);
+  const awayExpected = (awayExpectedOffense * 0.6 + homeExpectedDefense * 0.4);
   
   let baseTotal = homeExpected + awayExpected;
 
@@ -131,15 +137,22 @@ export function calculateMTO(input: CalculationInput): MTOPrediction {
   const awayFormStdDev = calculateStdDev(awayTeamStats.recentForm);
   const totalStdDev = Math.sqrt(homeFormStdDev * homeFormStdDev + awayFormStdDev * awayFormStdDev);
   
-  const zScore = -1.04;
-  const conservativeFloor = baseTotal + (zScore * totalStdDev);
+  const effectiveStdDev = totalStdDev > 0 ? totalStdDev : baseTotal * 0.12;
+  
+  const zScore = -1.28;
+  let conservativeFloor = baseTotal + (zScore * effectiveStdDev);
+  
+  conservativeFloor = Math.max(conservativeFloor, baseTotal * 0.75);
+  conservativeFloor = Math.min(conservativeFloor, baseTotal * 0.88);
   
   let mto = conservativeFloor;
 
-  if (sportsbookLine) {
-    const lineWeight = Math.min(SPORTSBOOK_MAX_WEIGHT, 0.20 + (1 - dataCompleteness) * 0.15);
+  if (sportsbookLine && !isNaN(sportsbookLine)) {
+    const lineWeight = Math.min(SPORTSBOOK_MAX_WEIGHT, 0.15 + (1 - dataCompleteness) * 0.10);
     const modelWeight = 1 - lineWeight;
-    mto = (conservativeFloor * modelWeight) + (sportsbookLine * lineWeight);
+    const blendedTotal = (conservativeFloor * modelWeight) + (sportsbookLine * lineWeight);
+    
+    mto = Math.min(blendedTotal, sportsbookLine * 0.92);
 
     keyFactors.push({
       factor: 'Sportsbook Line',

@@ -1,11 +1,41 @@
 import { Game, Sport, TeamStats, GameContext, CalculationInput } from '@/types/sports';
 import { getLeagueAverages } from './mtoEngine';
+import { Platform } from 'react-native';
 
-const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
-const ESPN_BASE_URL = 'https://site.api.espn.com/apis/site/v2/sports';
+const PROXY_BASE = '/api/fetch';
 
-function getProxiedUrl(url: string): string {
-  return `${CORS_PROXY}${encodeURIComponent(url)}`;
+const ESPN_BASES = [
+  'https://site.api.espn.com/apis/v2/sports',
+  'https://site.api.espn.com/apis/site/v2/sports'
+];
+
+async function tryFetch(path: string): Promise<Response | null> {
+  for (const base of ESPN_BASES) {
+    try {
+      const fullUrl = `${base}${path}`;
+      const proxyUrl = Platform.OS === 'web' 
+        ? `${PROXY_BASE}?url=${encodeURIComponent(fullUrl)}`
+        : fullUrl;
+      
+      console.log(`Trying: ${fullUrl}`);
+      const response = await fetch(proxyUrl, {
+        headers: {
+          'Accept': 'application/json',
+        },
+      });
+      
+      if (response.ok) {
+        console.log(`✓ Success with base: ${base}`);
+        return response;
+      }
+      
+      console.log(`✗ Failed with status ${response.status} for base: ${base}`);
+    } catch (error) {
+      console.log(`✗ Error with base ${base}:`, error);
+    }
+  }
+  
+  return null;
 }
 
 interface ESPNGame {
@@ -74,6 +104,13 @@ const SPORT_API_PATHS: Record<Sport, { league: string; sport: string } | null> =
   TENNIS: null,
 };
 
+function formatDateYYYYMMDD(date: Date): string {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return `${year}${month}${day}`;
+}
+
 async function fetchESPNGames(sport: Sport): Promise<ESPNGame[]> {
   const apiPath = SPORT_API_PATHS[sport];
   if (!apiPath) {
@@ -83,22 +120,15 @@ async function fetchESPNGames(sport: Sport): Promise<ESPNGame[]> {
 
   try {
     const today = new Date();
-    const year = today.getFullYear();
-    const month = String(today.getMonth() + 1).padStart(2, '0');
-    const day = String(today.getDate()).padStart(2, '0');
-    const dateStr = `${year}${month}${day}`;
+    const dateStr = formatDateYYYYMMDD(today);
     
-    const url = `${ESPN_BASE_URL}/${apiPath.league}/${apiPath.sport}/scoreboard?dates=${dateStr}`;
-    console.log(`Fetching ${sport} games from: ${url}`);
+    const path = `/${apiPath.league}/${apiPath.sport}/scoreboard?dates=${dateStr}`;
+    console.log(`Fetching ${sport} games for date ${dateStr}`);
     
-    const response = await fetch(getProxiedUrl(url), {
-      headers: {
-        'Accept': 'application/json',
-      },
-    });
+    const response = await tryFetch(path);
     
-    if (!response.ok) {
-      console.error(`ESPN API error for ${sport}: ${response.status} ${response.statusText}`);
+    if (!response) {
+      console.error(`All ESPN API attempts failed for ${sport}`);
       return [];
     }
 
@@ -111,18 +141,13 @@ async function fetchESPNGames(sport: Sport): Promise<ESPNGame[]> {
       
       for (let i = 1; i <= 7; i++) {
         const futureDate = new Date(today);
-        futureDate.setDate(futureDate.getDate() + i);
-        const futureYear = futureDate.getFullYear();
-        const futureMonth = String(futureDate.getMonth() + 1).padStart(2, '0');
-        const futureDay = String(futureDate.getDate()).padStart(2, '0');
-        const futureDateStr = `${futureYear}${futureMonth}${futureDay}`;
+        futureDate.setUTCDate(futureDate.getUTCDate() + i);
+        const futureDateStr = formatDateYYYYMMDD(futureDate);
         
-        const futureUrl = `${ESPN_BASE_URL}/${apiPath.league}/${apiPath.sport}/scoreboard?dates=${futureDateStr}`;
-        const futureResponse = await fetch(getProxiedUrl(futureUrl), {
-          headers: { 'Accept': 'application/json' },
-        });
+        const futurePath = `/${apiPath.league}/${apiPath.sport}/scoreboard?dates=${futureDateStr}`;
+        const futureResponse = await tryFetch(futurePath);
         
-        if (futureResponse.ok) {
+        if (futureResponse) {
           const futureData = await futureResponse.json();
           if (futureData.events && futureData.events.length > 0) {
             console.log(`Found ${futureData.events.length} games for ${sport} on ${futureDateStr}`);
@@ -146,12 +171,23 @@ async function fetchESPNGames(sport: Sport): Promise<ESPNGame[]> {
 function convertESPNGameToGame(espnGame: ESPNGame, sport: Sport): Game | null {
   try {
     const competition = espnGame.competitions[0];
-    if (!competition) return null;
+    if (!competition) {
+      console.log('No competition data in event');
+      return null;
+    }
 
     const homeTeam = competition.competitors.find(c => c.homeAway === 'home');
     const awayTeam = competition.competitors.find(c => c.homeAway === 'away');
 
-    if (!homeTeam || !awayTeam) return null;
+    if (!homeTeam || !awayTeam) {
+      console.log('Missing home or away team');
+      return null;
+    }
+
+    if (!homeTeam.team.id || !awayTeam.team.id) {
+      console.log('Missing team IDs');
+      return null;
+    }
 
     const status = espnGame.status.type.state === 'pre' ? 'scheduled' :
                    espnGame.status.type.state === 'in' ? 'live' : 'completed';
@@ -159,7 +195,7 @@ function convertESPNGameToGame(espnGame: ESPNGame, sport: Sport): Game | null {
     let sportsbookLine: number | undefined;
     if (competition.odds && competition.odds.length > 0) {
       const odds = competition.odds[0];
-      if (odds.overUnder) {
+      if (odds.overUnder && !isNaN(odds.overUnder)) {
         sportsbookLine = odds.overUnder;
         console.log(`Found real sportsbook line for ${homeTeam.team.displayName} vs ${awayTeam.team.displayName}: ${sportsbookLine}`);
       }
@@ -212,15 +248,13 @@ async function fetchRecentAveragesFromSchedule(
   if (!apiPath) return null;
 
   try {
-    const url = `${ESPN_BASE_URL}/${apiPath.league}/${apiPath.sport}/teams/${teamId}/schedule`;
-    console.log(`Fetching team schedule from: ${url}`);
+    const path = `/${apiPath.league}/${apiPath.sport}/teams/${teamId}/schedule`;
+    console.log(`Fetching team schedule for ${teamId}`);
     
-    const response = await fetch(getProxiedUrl(url), {
-      headers: { 'Accept': 'application/json' },
-    });
+    const response = await tryFetch(path);
     
-    if (!response.ok) {
-      console.log(`Failed to fetch team schedule: ${response.status}`);
+    if (!response) {
+      console.log(`Failed to fetch team schedule for ${teamId}`);
       return null;
     }
 
@@ -272,6 +306,11 @@ async function fetchRecentAveragesFromSchedule(
     const avgPointsAllowed = totalPointsAllowed / gamesPlayed;
     const recentForm = teamStats.map(stat => stat.teamScore);
 
+    if (isNaN(avgPointsScored) || isNaN(avgPointsAllowed)) {
+      console.log(`Invalid averages calculated for team ${teamId}`);
+      return null;
+    }
+
     console.log(`Team ${teamId} - Last ${gamesPlayed} games: PPG=${avgPointsScored.toFixed(1)}, PAPG=${avgPointsAllowed.toFixed(1)}`);
 
     return {
@@ -298,14 +337,19 @@ export async function fetchGameCalculationInput(game: Game): Promise<Calculation
   
   const defaultAvgPerTeam = leagueAverages.avgTotal / 2;
   
+  const homeAvgScored = homeRecentStats?.avgPointsScored ?? defaultAvgPerTeam;
+  const homeAvgAllowed = homeRecentStats?.avgPointsAllowed ?? defaultAvgPerTeam;
+  const awayAvgScored = awayRecentStats?.avgPointsScored ?? defaultAvgPerTeam;
+  const awayAvgAllowed = awayRecentStats?.avgPointsAllowed ?? defaultAvgPerTeam;
+  
   const homeTeamStats: TeamStats = {
     teamId: game.homeTeamId,
     teamName: game.homeTeam,
-    avgPointsScored: homeRecentStats?.avgPointsScored ?? defaultAvgPerTeam,
-    avgPointsAllowed: homeRecentStats?.avgPointsAllowed ?? defaultAvgPerTeam,
-    pace: leagueAverages.avgPace,
-    offensiveEfficiency: leagueAverages.avgOffensiveEfficiency,
-    defensiveEfficiency: leagueAverages.avgDefensiveEfficiency,
+    avgPointsScored: isNaN(homeAvgScored) ? defaultAvgPerTeam : homeAvgScored,
+    avgPointsAllowed: isNaN(homeAvgAllowed) ? defaultAvgPerTeam : homeAvgAllowed,
+    pace: leagueAverages.avgPace ?? 100,
+    offensiveEfficiency: leagueAverages.avgOffensiveEfficiency ?? 1.0,
+    defensiveEfficiency: leagueAverages.avgDefensiveEfficiency ?? 1.0,
     recentForm: homeRecentStats?.recentForm ?? [],
     gamesPlayed: homeRecentStats?.gamesPlayed ?? 0,
   };
@@ -313,11 +357,11 @@ export async function fetchGameCalculationInput(game: Game): Promise<Calculation
   const awayTeamStats: TeamStats = {
     teamId: game.awayTeamId,
     teamName: game.awayTeam,
-    avgPointsScored: awayRecentStats?.avgPointsScored ?? defaultAvgPerTeam,
-    avgPointsAllowed: awayRecentStats?.avgPointsAllowed ?? defaultAvgPerTeam,
-    pace: leagueAverages.avgPace,
-    offensiveEfficiency: leagueAverages.avgOffensiveEfficiency,
-    defensiveEfficiency: leagueAverages.avgDefensiveEfficiency,
+    avgPointsScored: isNaN(awayAvgScored) ? defaultAvgPerTeam : awayAvgScored,
+    avgPointsAllowed: isNaN(awayAvgAllowed) ? defaultAvgPerTeam : awayAvgAllowed,
+    pace: leagueAverages.avgPace ?? 100,
+    offensiveEfficiency: leagueAverages.avgOffensiveEfficiency ?? 1.0,
+    defensiveEfficiency: leagueAverages.avgDefensiveEfficiency ?? 1.0,
     recentForm: awayRecentStats?.recentForm ?? [],
     gamesPlayed: awayRecentStats?.gamesPlayed ?? 0,
   };
