@@ -11,13 +11,14 @@ export default function DateSelector({ selectedDate, onDateSelect }: DateSelecto
   const today = toISODateLocal();
 
   const formatDate = (isoDate: string) => {
-    const date = new Date(isoDate);
     const isToday = isoDate === today;
     const isTomorrow = isoDate === dates[1];
 
     if (isToday) return { label: 'Today', sub: '' };
     if (isTomorrow) return { label: 'Tomorrow', sub: '' };
 
+    const [y, m, d] = isoDate.split('-').map(Number);
+    const date = new Date(y!, m! - 1, d!);
     const dayOfWeek = date.toLocaleDateString('en-US', { weekday: 'short' });
     const monthDay = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     return { label: dayOfWeek, sub: monthDay };
