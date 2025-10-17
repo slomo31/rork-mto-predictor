@@ -6,12 +6,13 @@ import { toYyyymmddUTC, isISOWithinLocalDate } from '@/utils/date';
 const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports';
 
 const CORS_PROXIES = [
+  (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
   (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-  (u: string) => `https://cors.isomorphic-git.org/${u}`,
-  (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`
+  (u: string) => `https://cors-anywhere.herokuapp.com/${u}`,
+  (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
 ];
 
-async function fetchJSONViaProxies(upstreamUrl: string) {
+async function fetchJSONViaProxies(upstreamUrl: string, timeoutMs = 8000) {
   let lastErr: any;
   
   for (const wrap of CORS_PROXIES) {
@@ -19,10 +20,19 @@ async function fetchJSONViaProxies(upstreamUrl: string) {
     console.log(`[realDataService] Trying proxy for: ${upstreamUrl}`);
     
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      
       const r = await fetch(proxyUrl, {
-        headers: { accept: 'application/json' },
-        cache: 'no-store'
+        headers: { 
+          accept: 'application/json',
+          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        },
+        cache: 'no-store',
+        signal: controller.signal
       });
+      
+      clearTimeout(timeoutId);
       
       const text = await r.text();
       const isJson =
@@ -218,14 +228,85 @@ function convertESPNGameToGame(espnGame: ESPNGame, sport: Sport): Game | null {
   }
 }
 
+const ODDSAPI_PRIORITY_SPORTS: Sport[] = ['NBA', 'NHL', 'MLB', 'NCAA_BB'];
+
 export async function fetchUpcomingGames(sport: Sport, isoDate: string): Promise<Game[]> {
   const api = SPORT_API_PATHS[sport];
-  if (!api) {
-    console.log(`[${sport}] No API path configured`);
-    return [];
-  }
+  const oddsKey = ODDSAPI_SPORT_KEYS[sport];
   
   console.log(`[${sport}] ====== Fetching games for ${isoDate} ======`);
+  
+  if (ODDSAPI_PRIORITY_SPORTS.includes(sport) && oddsKey) {
+    console.log(`[${sport}] Using OddsAPI as primary source (ESPN unreliable for this sport)`);
+    try {
+      const fixtures = await getFixturesForDate(oddsKey, isoDate);
+      console.log(`[${sport}] OddsAPI returned ${fixtures.length} fixtures`);
+      
+      const gamesFromOdds: Game[] = fixtures
+        .filter((f: OddsFixture) => {
+          const withinDay = isISOWithinLocalDate(f.commence_time, isoDate);
+          return withinDay;
+        })
+        .map((f: OddsFixture, idx: number) => {
+          const sportsbookLine = extractConsensusTotal(f);
+          const gameDate = new Date(f.commence_time);
+          const gameDateStr = gameDate.toISOString();
+          
+          console.log(`  ${f.away_team} @ ${f.home_team}, Line: ${sportsbookLine ?? 'none'}`);
+          
+          return {
+            id: `${sport}-odds-${f.id || idx}`,
+            sport,
+            homeTeam: f.home_team,
+            awayTeam: f.away_team,
+            homeTeamId: f.home_team,
+            awayTeamId: f.away_team,
+            gameDate: gameDateStr,
+            venue: 'TBD',
+            status: 'scheduled' as const,
+            homeTeamLogo: undefined,
+            awayTeamLogo: undefined,
+            sportsbookLine,
+          };
+        }).sort((a: Game, b: Game) => new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime());
+      
+      console.info(`[${sport}] ✓ OddsAPI primary: ${gamesFromOdds.length} games`);
+      return gamesFromOdds;
+    } catch (e) {
+      console.error(`[${sport}] OddsAPI primary failed:`, e);
+      return [];
+    }
+  }
+  
+  if (!api) {
+    console.log(`[${sport}] No API path configured`);
+    if (oddsKey) {
+      console.log(`[${sport}] Falling back to OddsAPI`);
+      try {
+        const fixtures = await getFixturesForDate(oddsKey, isoDate);
+        const gamesFromOdds: Game[] = fixtures
+          .filter((f: OddsFixture) => isISOWithinLocalDate(f.commence_time, isoDate))
+          .map((f: OddsFixture, idx: number) => ({
+            id: `${sport}-odds-${f.id || idx}`,
+            sport,
+            homeTeam: f.home_team,
+            awayTeam: f.away_team,
+            homeTeamId: f.home_team,
+            awayTeamId: f.away_team,
+            gameDate: new Date(f.commence_time).toISOString(),
+            venue: 'TBD',
+            status: 'scheduled' as const,
+            homeTeamLogo: undefined,
+            awayTeamLogo: undefined,
+            sportsbookLine: extractConsensusTotal(f),
+          })).sort((a: Game, b: Game) => new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime());
+        return gamesFromOdds;
+      } catch (e) {
+        console.error(`[${sport}] OddsAPI fallback failed:`, e);
+      }
+    }
+    return [];
+  }
   
   try {
     const rawEvents = await fetchScoreboardEvents(api.league, api.sport, isoDate);
@@ -248,7 +329,6 @@ export async function fetchUpcomingGames(sport: Sport, isoDate: string): Promise
     console.warn(`[${sport}] ESPN failed, trying OddsAPI fallback:`, err);
   }
   
-  const oddsKey = ODDSAPI_SPORT_KEYS[sport];
   if (!oddsKey) {
     console.log(`[${sport}] No OddsAPI key available for fallback`);
     return [];
@@ -259,17 +339,14 @@ export async function fetchUpcomingGames(sport: Sport, isoDate: string): Promise
     const fixtures = await getFixturesForDate(oddsKey, isoDate);
     console.log(`[${sport}] OddsAPI returned ${fixtures.length} fixtures`);
     
-    fixtures.forEach(f => {
-      console.log(`  Raw fixture: ${f.away_team} @ ${f.home_team} at ${f.commence_time}`);
-    });
-    
     const gamesFromOdds: Game[] = fixtures
+      .filter((f: OddsFixture) => isISOWithinLocalDate(f.commence_time, isoDate))
       .map((f: OddsFixture, idx: number) => {
         const sportsbookLine = extractConsensusTotal(f);
         const gameDate = new Date(f.commence_time);
         const gameDateStr = gameDate.toISOString();
         
-        console.log(`  Mapping: ${f.away_team} @ ${f.home_team}, Date: ${gameDateStr}, Line: ${sportsbookLine ?? 'none'}`);
+        console.log(`  ${f.away_team} @ ${f.home_team}, Line: ${sportsbookLine ?? 'none'}`);
         
         return {
           id: `${sport}-odds-${f.id || idx}`,
