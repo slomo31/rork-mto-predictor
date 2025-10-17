@@ -5,8 +5,8 @@ import { Platform } from 'react-native';
 const PROXY_BASE = '/api/fetch';
 
 const ESPN_BASES = [
-  'https://site.api.espn.com/apis/v2/sports',
-  'https://site.api.espn.com/apis/site/v2/sports'
+  'https://site.api.espn.com/apis/site/v2/sports',
+  'https://sports.core.api.espn.com/v2/sports'
 ];
 
 async function tryFetch(path: string): Promise<Response | null> {
@@ -25,11 +25,28 @@ async function tryFetch(path: string): Promise<Response | null> {
       });
       
       if (response.ok) {
-        console.log(`✓ Success with base: ${base}`);
-        return response;
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          try {
+            const clonedResponse = response.clone();
+            const testData = await clonedResponse.json();
+            
+            if (testData.error) {
+              console.log(`✗ Proxy returned error for ${base}:`, testData.error);
+              continue;
+            }
+            
+            console.log(`✓ Success with base: ${base}`);
+            return response;
+          } catch (e) {
+            console.log(`✗ Invalid JSON from ${base}`);
+          }
+        } else {
+          console.log(`✗ Non-JSON response from ${base}`);
+        }
+      } else {
+        console.log(`✗ Failed with status ${response.status} for base: ${base}`);
       }
-      
-      console.log(`✗ Failed with status ${response.status} for base: ${base}`);
     } catch (error) {
       console.log(`✗ Error with base ${base}:`, error);
     }
