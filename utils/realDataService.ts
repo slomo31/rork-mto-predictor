@@ -10,20 +10,21 @@ async function tryFetch(path: string): Promise<Response | null> {
   for (const base of ESPN_BASES) {
     try {
       const fullUrl = `${base}${path}`;
+      const proxyUrl = `/api/fetch?url=${encodeURIComponent(fullUrl)}`;
       
-      console.log(`Trying: ${fullUrl}`);
+      console.log(`[realDataService] Trying via proxy: ${fullUrl}`);
       
-      const response = await fetch(fullUrl, {
+      const response = await fetch(proxyUrl, {
         headers: {
           'Accept': 'application/json',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         },
       });
       
-      console.log(`Response status: ${response.status}`);
+      console.log(`[realDataService] Proxy response status: ${response.status}`);
       
       if (!response.ok) {
-        console.log(`✗ Non-200 response from ${base}: ${response.status}`);
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        console.log(`✗ Non-200 response from ${base}: ${response.status}`, errorData);
         continue;
       }
       
@@ -36,6 +37,11 @@ async function tryFetch(path: string): Promise<Response | null> {
       try {
         const clonedResponse = response.clone();
         const testData = await clonedResponse.json();
+        
+        if (testData.error) {
+          console.log(`✗ Proxy returned error from ${base}:`, testData.error);
+          continue;
+        }
         
         if (testData.events !== undefined || testData.team !== undefined) {
           console.log(`✓ Success with base: ${base}`);
