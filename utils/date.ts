@@ -32,3 +32,20 @@ export function toYyyymmddUTC(isoDate: string) {
   const dt = new Date(Date.UTC(y!, (m! - 1), d!));
   return `${dt.getUTCFullYear()}${String(dt.getUTCMonth() + 1).padStart(2, '0')}${String(dt.getUTCDate()).padStart(2, '0')}`;
 }
+
+export function getNext7Dates(fromISO = toISODateLocal()): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    out.push(addDaysISO(fromISO, i));
+  }
+  return out;
+}
+
+export function clampToNext7Days(iso: string, base = toISODateLocal()): string {
+  const window = getNext7Dates(base);
+  const min = window[0]!;
+  const max = window[6]!;
+  if (iso < min) return min;
+  if (iso > max) return max;
+  return iso;
+}
