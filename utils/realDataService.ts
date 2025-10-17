@@ -1,7 +1,12 @@
 import { Game, Sport, TeamStats, GameContext, CalculationInput } from '@/types/sports';
 import { getLeagueAverages } from './mtoEngine';
 
+const CORS_PROXY = 'https://corsproxy.io/?';
 const ESPN_BASE_URL = 'https://site.api.espn.com/apis/v2/sports';
+
+function getProxiedUrl(url: string): string {
+  return `${CORS_PROXY}${encodeURIComponent(url)}`;
+}
 
 interface ESPNGame {
   id: string;
@@ -86,7 +91,7 @@ async function fetchESPNGames(sport: Sport): Promise<ESPNGame[]> {
     const url = `${ESPN_BASE_URL}/${apiPath.league}/${apiPath.sport}/scoreboard?dates=${dateStr}`;
     console.log(`Fetching ${sport} games from: ${url}`);
     
-    const response = await fetch(url, {
+    const response = await fetch(getProxiedUrl(url), {
       headers: {
         'Accept': 'application/json',
       },
@@ -113,7 +118,7 @@ async function fetchESPNGames(sport: Sport): Promise<ESPNGame[]> {
         const futureDateStr = `${futureYear}${futureMonth}${futureDay}`;
         
         const futureUrl = `${ESPN_BASE_URL}/${apiPath.league}/${apiPath.sport}/scoreboard?dates=${futureDateStr}`;
-        const futureResponse = await fetch(futureUrl, {
+        const futureResponse = await fetch(getProxiedUrl(futureUrl), {
           headers: { 'Accept': 'application/json' },
         });
         
@@ -210,7 +215,7 @@ async function fetchRecentAveragesFromSchedule(
     const url = `${ESPN_BASE_URL}/${apiPath.league}/${apiPath.sport}/teams/${teamId}/schedule`;
     console.log(`Fetching team schedule from: ${url}`);
     
-    const response = await fetch(url, {
+    const response = await fetch(getProxiedUrl(url), {
       headers: { 'Accept': 'application/json' },
     });
     
