@@ -4,8 +4,8 @@ import * as mockDataService from './mockDataService';
 
 const ESPN_BASES = [
   'https://site.api.espn.com/apis/site/v2/sports',
-  'https://sports.core.api.espn.com/v2/sports',
-  'https://site.web.api.espn.com/apis/site/v2/sports'
+  'https://site.web.api.espn.com/apis/site/v2/sports',
+  'https://sportscenter.api.espn.com/apis/site/v2/sports'
 ];
 
 async function tryFetch(path: string): Promise<Response | null> {
