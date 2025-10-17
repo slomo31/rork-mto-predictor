@@ -88,7 +88,7 @@ export function useGamePrediction(game: Game) {
     queryKey: ['prediction', game.id, game],
     queryFn: async (): Promise<MTOPrediction> => {
       const input = await fetchGameCalculationInput(game);
-      return calculateMTO(input);
+      return calculateMTO(input, game.homeTeam, game.awayTeam);
     },
     staleTime: 10 * 60 * 1000,
   });

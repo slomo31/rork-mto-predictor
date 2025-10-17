@@ -1,9 +1,21 @@
 import { CalculationInput, KeyFactor, MTOPrediction, Sport } from '@/types/sports';
+import { getOddsForGame } from './OddsService';
+import { boundedMarketBlend } from './marketBlend';
 
-const PERCENTILE = 0.15;
 const SPORTSBOOK_MAX_WEIGHT = 0.30;
 
-export function calculateMTO(input: CalculationInput): MTOPrediction {
+const SPORT_TO_ODDS_KEY: Record<Sport, string> = {
+  NFL: 'americanfootball_nfl',
+  NCAA_FB: 'americanfootball_ncaaf',
+  NBA: 'basketball_nba',
+  NCAA_BB: 'basketball_ncaab',
+  MLB: 'baseball_mlb',
+  NHL: 'icehockey_nhl',
+  SOCCER: 'soccer_epl',
+  TENNIS: 'tennis_atp'
+};
+
+export async function calculateMTO(input: CalculationInput, homeTeamName?: string, awayTeamName?: string): Promise<MTOPrediction> {
   const {
     homeTeamStats,
     awayTeamStats,
@@ -162,7 +174,42 @@ export function calculateMTO(input: CalculationInput): MTOPrediction {
     });
   }
 
-  const confidence = Math.max(0.3, Math.min(0.95, dataCompleteness * 0.85 + (homeTeamStats.gamesPlayed > 10 && awayTeamStats.gamesPlayed > 10 ? 0.15 : 0)));
+  let marketData;
+  let finalMTO = mto;
+  let baseConfidence = Math.max(0.3, Math.min(0.95, dataCompleteness * 0.85 + (homeTeamStats.gamesPlayed > 10 && awayTeamStats.gamesPlayed > 10 ? 0.15 : 0)));
+
+  if (homeTeamName && awayTeamName) {
+    const oddsKey = SPORT_TO_ODDS_KEY[sport];
+    const odds = await getOddsForGame(oddsKey, homeTeamName, awayTeamName);
+    
+    if (odds.source !== 'none' && odds.market_total_mean) {
+      const muModel = baseTotal;
+      const sigmaModel = effectiveStdDev;
+      const { mu, sigma, confAdj } = boundedMarketBlend(muModel, sigmaModel, odds);
+      
+      const zScore = -1.036;
+      let blendedFloor = mu + (zScore * sigma);
+      blendedFloor = Math.max(blendedFloor, mu * 0.70);
+      blendedFloor = Math.min(blendedFloor, mu * 0.88);
+      
+      finalMTO = blendedFloor;
+      baseConfidence = Math.max(0.35, Math.min(0.95, baseConfidence + (confAdj / 100)));
+      
+      marketData = {
+        market_total_mean: odds.market_total_mean,
+        market_total_std: odds.market_total_std,
+        num_books: odds.num_books,
+        source: odds.source,
+      };
+      
+      keyFactors.push({
+        factor: 'Market Data Integration',
+        impact: 'neutral',
+        weight: 0.20,
+        description: `Market: ${odds.market_total_mean.toFixed(1)} (${odds.num_books} books, σ=${(odds.market_total_std ?? 0).toFixed(2)})`
+      });
+    }
+  }
 
   return {
     gameId: `${input.homeTeamStats.teamId}-${input.awayTeamStats.teamId}`,
@@ -170,11 +217,12 @@ export function calculateMTO(input: CalculationInput): MTOPrediction {
     homeTeam: homeTeamStats.teamName,
     awayTeam: awayTeamStats.teamName,
     gameDate: new Date().toISOString(),
-    predictedMTO: Math.round(mto * 10) / 10,
-    confidence: Math.round(confidence * 100) / 100,
+    predictedMTO: Math.round(finalMTO * 10) / 10,
+    confidence: Math.round(baseConfidence * 100) / 100,
     sportsbookLine,
     keyFactors,
-    dataCompleteness: Math.round(dataCompleteness * 100) / 100
+    dataCompleteness: Math.round(dataCompleteness * 100) / 100,
+    marketData
   };
 }
 

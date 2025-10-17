@@ -4,6 +4,7 @@ import { Game } from '@/types/sports';
 import { useGamePrediction } from '@/contexts/GamesContext';
 import { SPORT_INFO, getConfidenceColor } from '@/constants/sportInfo';
 import { useState } from 'react';
+import { MarketVsModel } from './MarketVsModel';
 
 interface GameCardProps {
   game: Game;
@@ -93,6 +94,15 @@ export default function GameCard({ game }: GameCardProps) {
           </View>
         </View>
       </View>
+
+      {prediction.marketData && prediction.marketData.source !== 'none' && (
+        <MarketVsModel
+          marketTotal={prediction.marketData.market_total_mean}
+          marketStd={prediction.marketData.market_total_std}
+          modelFloor={prediction.predictedMTO}
+          source={prediction.marketData.source}
+        />
+      )}
 
       {showDetails && (
         <View style={styles.detailsContainer}>

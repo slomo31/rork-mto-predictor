@@ -45,6 +45,12 @@ export interface MTOPrediction {
   sportsbookLine?: number;
   keyFactors: KeyFactor[];
   dataCompleteness: number;
+  marketData?: {
+    market_total_mean?: number;
+    market_total_std?: number;
+    num_books?: number;
+    source?: 'oddsapi' | 'cache' | 'none';
+  };
 }
 
 export interface KeyFactor {
