@@ -91,8 +91,28 @@ export async function getOddsFeatures(sportKey: string): Promise<OddsFeatures> {
   }
 }
 
-function normName(s: string) { 
-  return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); 
+const ALIASES: Record<string, string> = {
+  'la clippers': 'los angeles clippers',
+  'la lakers': 'los angeles lakers',
+  'ny knicks': 'new york knicks',
+  'ny rangers': 'new york rangers',
+  'ny islanders': 'new york islanders',
+  'ny jets': 'new york jets',
+  'ny giants': 'new york giants',
+  'ucf': 'central florida',
+  'miami fl': 'miami',
+  'miami (fl)': 'miami',
+  'usc': 'southern california',
+  'lsu': 'louisiana state',
+  'ole miss': 'mississippi',
+  'tcu': 'texas christian',
+  'smu': 'southern methodist',
+  'byu': 'brigham young',
+};
+
+function normName(s: string) {
+  const t = (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return ALIASES[t] ?? t;
 }
 
 function teamsMatch(aHome: string, aAway: string, bHome: string, bAway: string) {

@@ -104,6 +104,20 @@ export default function GameCard({ game }: GameCardProps) {
         />
       )}
 
+      {process.env.NODE_ENV !== 'production' && prediction.marketData && prediction.marketData.source !== 'none' && (
+        <View style={styles.devRibbon}>
+          <Text style={styles.devRibbonText}>
+            Model μ {(prediction.marketData.market_total_mean ? 
+              ((prediction.predictedMTO / 0.85) * 1.0).toFixed(1) : '—')} | 
+            Market {prediction.marketData.market_total_mean?.toFixed(1) ?? '—'} 
+            (w={((prediction.keyFactors.find(f => f.factor === 'Market Data Integration')?.weight ?? 0) * 100).toFixed(0)}%, 
+            std={prediction.marketData.market_total_std?.toFixed(1) ?? '—'}, 
+            books={prediction.marketData.num_books ?? 0}) → 
+            Floor {prediction.predictedMTO.toFixed(1)}
+          </Text>
+        </View>
+      )}
+
       {showDetails && (
         <View style={styles.detailsContainer}>
           <Text style={styles.detailsTitle}>Key Factors</Text>
@@ -358,5 +372,19 @@ const styles = StyleSheet.create({
     color: '#475569',
     fontSize: 11,
     fontStyle: 'italic' as const,
+  },
+  devRibbon: {
+    marginTop: 8,
+    padding: 8,
+    backgroundColor: '#0a0a0a',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#fbbf24',
+  },
+  devRibbonText: {
+    color: '#fbbf24',
+    fontSize: 10,
+    fontFamily: 'monospace',
+    lineHeight: 14,
   },
 });

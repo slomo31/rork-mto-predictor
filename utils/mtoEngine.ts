@@ -185,15 +185,20 @@ export async function calculateMTO(input: CalculationInput, homeTeamName?: strin
     if (odds.source !== 'none' && odds.market_total_mean) {
       const muModel = baseTotal;
       const sigmaModel = effectiveStdDev;
-      const { mu, sigma, confAdj } = boundedMarketBlend(muModel, sigmaModel, odds);
+      const { mu, sigma, confAdj, weight } = boundedMarketBlend(muModel, sigmaModel, odds, sport);
       
-      const zScore = -1.036;
-      let blendedFloor = mu + (zScore * sigma);
-      blendedFloor = Math.max(blendedFloor, mu * 0.70);
-      blendedFloor = Math.min(blendedFloor, mu * 0.88);
+      const z15 = 1.036;
+      const mtoFloor = mu - z15 * sigma;
       
-      finalMTO = blendedFloor;
-      baseConfidence = Math.max(0.35, Math.min(0.95, baseConfidence + (confAdj / 100)));
+      finalMTO = Math.max(0, mtoFloor);
+      
+      const defaultStd: Record<Sport, number> = {
+        NFL: 1.5, NCAA_FB: 2.0, NBA: 2.5, NCAA_BB: 3.0,
+        MLB: 0.5, NHL: 0.7, SOCCER: 0.8, TENNIS: 0.6
+      };
+      const dispersion = Math.max(0, odds.market_total_std ?? defaultStd[sport] ?? 1.5);
+      const confAdjustment = -Math.min(15, dispersion * 2);
+      baseConfidence = Math.max(0.35, Math.min(0.95, baseConfidence + (confAdjustment / 100)));
       
       marketData = {
         market_total_mean: odds.market_total_mean,
@@ -205,9 +210,26 @@ export async function calculateMTO(input: CalculationInput, homeTeamName?: strin
       keyFactors.push({
         factor: 'Market Data Integration',
         impact: 'neutral',
-        weight: 0.20,
-        description: `Market: ${odds.market_total_mean.toFixed(1)} (${odds.num_books} books, σ=${(odds.market_total_std ?? 0).toFixed(2)})`
+        weight: weight,
+        description: `Market: ${odds.market_total_mean.toFixed(1)} (${odds.num_books ?? 0} books, σ=${(odds.market_total_std ?? defaultStd[sport] ?? 0).toFixed(2)})`
       });
+
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('🔬 MTO Diagnostics:', {
+          game: `${homeTeamName} vs ${awayTeamName}`,
+          mu_model: muModel.toFixed(2),
+          sigma_model: sigmaModel.toFixed(2),
+          mu_market: odds.market_total_mean.toFixed(2),
+          std_market: (odds.market_total_std ?? defaultStd[sport] ?? 0).toFixed(2),
+          num_books: odds.num_books ?? 0,
+          weight_w: weight.toFixed(3),
+          mu_post: mu.toFixed(2),
+          sigma_post: sigma.toFixed(2),
+          mto_floor: finalMTO.toFixed(2),
+          sportsbook_line: sportsbookLine?.toFixed(2) ?? 'N/A',
+          confidence: Math.round(baseConfidence * 100) + '%',
+        });
+      }
     }
   }
 

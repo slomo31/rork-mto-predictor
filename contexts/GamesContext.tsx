@@ -83,12 +83,23 @@ export const [GamesProvider, useGames] = createContextHook(() => {
   }), [filteredGames, gamesQuery.isLoading, gamesQuery.error, selectedSports, toggleSport, selectAllSports, dateFilter, gamesQuery.refetch]);
 });
 
+const predictionCache = new Map<string, { ts: number; data: MTOPrediction }>();
+const PREDICTION_CACHE_TTL = 5 * 60 * 1000;
+
 export function useGamePrediction(game: Game) {
   return useQuery({
     queryKey: ['prediction', game.id, game],
     queryFn: async (): Promise<MTOPrediction> => {
+      const now = Date.now();
+      const cached = predictionCache.get(game.id);
+      if (cached && now - cached.ts < PREDICTION_CACHE_TTL) {
+        return cached.data;
+      }
+
       const input = await fetchGameCalculationInput(game);
-      return calculateMTO(input, game.homeTeam, game.awayTeam);
+      const prediction = await calculateMTO(input, game.homeTeam, game.awayTeam);
+      predictionCache.set(game.id, { ts: now, data: prediction });
+      return prediction;
     },
     staleTime: 10 * 60 * 1000,
   });
