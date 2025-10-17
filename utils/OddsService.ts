@@ -139,3 +139,57 @@ export async function getOddsForGame(sportKey: string, home: string, away: strin
     return { source: 'none' as const };
   }
 }
+
+export type OddsFixture = {
+  id: string;
+  home_team: string;
+  away_team: string;
+  commence_time: string;
+  bookmakers?: {
+    key: string;
+    markets?: {
+      key: string;
+      outcomes?: { name: string; price: number; point?: number }[];
+    }[];
+  }[];
+};
+
+export async function getFixturesForDate(
+  sportKey: string,
+  isoDate: string
+): Promise<OddsFixture[]> {
+  try {
+    const base = '/api/odds';
+    const params = new URLSearchParams({
+      sport: sportKey,
+      regions: 'us',
+      markets: 'totals',
+      oddsFormat: 'american',
+      dateFormat: 'iso',
+    });
+    const res = await fetch(`${base}?${params.toString()}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`Odds fixtures failed: ${res.status}`);
+    const json = await res.json();
+    const data = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
+    return data as OddsFixture[];
+  } catch (e) {
+    console.warn('[getFixturesForDate] Failed:', e);
+    return [];
+  }
+}
+
+export function extractConsensusTotal(fix: OddsFixture): number | undefined {
+  const totals: number[] = [];
+  for (const bk of fix.bookmakers || []) {
+    for (const m of bk.markets || []) {
+      if (m.key !== 'totals') continue;
+      for (const o of m.outcomes || []) {
+        if (typeof o.point === 'number') totals.push(o.point);
+      }
+    }
+  }
+  if (!totals.length) return undefined;
+  totals.sort((a, b) => a - b);
+  const mid = Math.floor(totals.length / 2);
+  return totals.length % 2 ? totals[mid] : (totals[mid! - 1]! + totals[mid]!) / 2;
+}

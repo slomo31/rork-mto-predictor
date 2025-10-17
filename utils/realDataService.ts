@@ -1,5 +1,6 @@
 import { Game, Sport, TeamStats, GameContext, CalculationInput } from '@/types/sports';
 import { getLeagueAverages } from './mtoEngine';
+import { getFixturesForDate, extractConsensusTotal, type OddsFixture } from '@/utils/OddsService';
 
 const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports';
 
@@ -118,6 +119,16 @@ const SPORT_API_PATHS: Record<Sport, { league: string; sport: string } | null> =
   TENNIS: null,
 };
 
+const ODDSAPI_SPORT_KEYS: Partial<Record<Sport, string>> = {
+  NFL: 'americanfootball_nfl',
+  MLB: 'baseball_mlb',
+  NBA: 'basketball_nba',
+  NHL: 'icehockey_nhl',
+  NCAA_FB: 'americanfootball_ncaaf',
+  NCAA_BB: 'basketball_ncaab',
+  SOCCER: 'soccer_usa_mls',
+};
+
 function toYyyymmddUTC(iso: string): string {
   const [y, m, d] = iso.split('-').map(Number);
   const dt = new Date(Date.UTC(y!, m! - 1, d!));
@@ -190,24 +201,58 @@ function convertESPNGameToGame(espnGame: ESPNGame, sport: Sport): Game | null {
 }
 
 export async function fetchUpcomingGames(sport: Sport, isoDate?: string): Promise<Game[]> {
+  const api = SPORT_API_PATHS[sport];
+  if (!api) return [];
+  
+  const targetDate = isoDate || new Date().toISOString().split('T')[0];
+  console.log(`[${sport}] Fetching games for ${targetDate}`);
+  
   try {
-    const api = SPORT_API_PATHS[sport];
-    if (!api) return [];
-    
-    const targetDate = isoDate || new Date().toISOString().split('T')[0];
-    console.log(`[${sport}] Fetching games for ${targetDate}`);
-    
     const events = await fetchScoreboard(api.league, api.sport, targetDate);
     const games = (events || [])
       .map((e: any) => convertESPNGameToGame(e, sport))
-      .filter((g): g is Game => !!g)
+      .filter((g: any): g is Game => !!g)
       .filter((g: Game) => g.status === 'scheduled' || g.status === 'live')
       .sort((a: Game, b: Game) => new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime());
     
-    console.log(`[${sport}] Converted to ${games.length} valid upcoming games`);
-    return games;
+    if (games.length > 0) {
+      console.log(`[${sport}] ESPN success: ${games.length} games`);
+      return games;
+    }
   } catch (err) {
-    console.error(`[${sport}] ESPN failed:`, err);
+    console.warn(`[${sport}] ESPN failed, trying OddsAPI fallback:`, err);
+  }
+  
+  const oddsKey = ODDSAPI_SPORT_KEYS[sport];
+  if (!oddsKey) {
+    console.log(`[${sport}] No OddsAPI key available for fallback`);
+    return [];
+  }
+  
+  try {
+    const fixtures = await getFixturesForDate(oddsKey, targetDate);
+    const gamesFromOdds: Game[] = fixtures.map((f: OddsFixture, idx: number) => {
+      const sportsbookLine = extractConsensusTotal(f);
+      return {
+        id: `${sport}-odds-${f.id || idx}`,
+        sport,
+        homeTeam: f.home_team,
+        awayTeam: f.away_team,
+        homeTeamId: f.home_team,
+        awayTeamId: f.away_team,
+        gameDate: f.commence_time,
+        venue: 'TBD',
+        status: 'scheduled' as const,
+        homeTeamLogo: undefined,
+        awayTeamLogo: undefined,
+        sportsbookLine,
+      };
+    }).sort((a: Game, b: Game) => new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime());
+    
+    console.info(`[${sport}] OddsAPI fallback used — ${gamesFromOdds.length} games`);
+    return gamesFromOdds;
+  } catch (e) {
+    console.error(`[${sport}] OddsAPI fallback failed:`, e);
     return [];
   }
 }
