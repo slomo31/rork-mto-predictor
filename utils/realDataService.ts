@@ -4,8 +4,8 @@ import * as mockDataService from './mockDataService';
 
 const ESPN_BASES = [
   'https://site.api.espn.com/apis/site/v2/sports',
-  'https://site.api.espn.com/apis/v2/sports',
-  'https://sports.core.api.espn.com/v2/sports'
+  'https://sports.core.api.espn.com/v2/sports',
+  'https://site.web.api.espn.com/apis/site/v2/sports'
 ];
 
 async function tryFetch(path: string): Promise<Response | null> {
@@ -173,19 +173,22 @@ async function fetchESPNGames(sport: Sport): Promise<ESPNGame[]> {
     const today = new Date();
     const dateStr = formatDateYYYYMMDD(today);
     
-    let path = `/${apiPath.league}/${apiPath.sport}/scoreboard?dates=${dateStr}`;
-    console.log(`Fetching ${sport} games for date ${dateStr}`);
+    console.log(`[${sport}] Attempting to fetch games for ${dateStr}`);
     
-    let response = await tryFetch(path);
+    let response = await tryFetch(`/${apiPath.league}/${apiPath.sport}/scoreboard?dates=${dateStr}`);
     
     if (!response) {
-      console.log(`Trying without dates param for ${sport}...`);
-      path = `/${apiPath.league}/${apiPath.sport}/scoreboard`;
-      response = await tryFetch(path);
+      console.log(`[${sport}] Date param failed, trying without dates...`);
+      response = await tryFetch(`/${apiPath.league}/${apiPath.sport}/scoreboard`);
     }
     
     if (!response) {
-      console.error(`All ESPN API attempts failed for ${sport}`);
+      console.log(`[${sport}] Scoreboard failed, trying news endpoint...`);
+      response = await tryFetch(`/${apiPath.league}/${apiPath.sport}/news`);
+    }
+    
+    if (!response) {
+      console.error(`[${sport}] All ESPN API attempts failed - falling back to mock data`);
       espnApiFailing = true;
       lastEspnCheck = now;
       return [];
@@ -193,10 +196,10 @@ async function fetchESPNGames(sport: Sport): Promise<ESPNGame[]> {
 
     espnApiFailing = false;
     const data = await response.json();
-    console.log(`ESPN API returned ${data.events?.length || 0} events for ${sport} on ${dateStr}`);
+    console.log(`[${sport}] ESPN API returned ${data.events?.length || 0} events`);
     
     if (!data.events || data.events.length === 0) {
-      console.log(`No games today for ${sport}, fetching next 7 days...`);
+      console.log(`[${sport}] No games found for today, trying next 7 days...`);
       const allEvents: ESPNGame[] = [];
       
       for (let i = 1; i <= 7; i++) {
@@ -204,13 +207,12 @@ async function fetchESPNGames(sport: Sport): Promise<ESPNGame[]> {
         futureDate.setUTCDate(futureDate.getUTCDate() + i);
         const futureDateStr = formatDateYYYYMMDD(futureDate);
         
-        const futurePath = `/${apiPath.league}/${apiPath.sport}/scoreboard?dates=${futureDateStr}`;
-        const futureResponse = await tryFetch(futurePath);
+        const futureResponse = await tryFetch(`/${apiPath.league}/${apiPath.sport}/scoreboard?dates=${futureDateStr}`);
         
         if (futureResponse) {
           const futureData = await futureResponse.json();
           if (futureData.events && futureData.events.length > 0) {
-            console.log(`Found ${futureData.events.length} games for ${sport} on ${futureDateStr}`);
+            console.log(`[${sport}] Found ${futureData.events.length} games on ${futureDateStr}`);
             allEvents.push(...futureData.events);
           }
         }
@@ -223,7 +225,7 @@ async function fetchESPNGames(sport: Sport): Promise<ESPNGame[]> {
     
     return data.events || [];
   } catch (error) {
-    console.error(`Error fetching ${sport} games:`, error);
+    console.error(`[${sport}] Error fetching games:`, error);
     espnApiFailing = true;
     lastEspnCheck = now;
     return [];
@@ -284,20 +286,20 @@ function convertESPNGameToGame(espnGame: ESPNGame, sport: Sport): Game | null {
 }
 
 export async function fetchUpcomingGames(sport: Sport): Promise<Game[]> {
-  console.log(`Fetching upcoming games for ${sport}`);
+  console.log(`[${sport}] Starting fetchUpcomingGames...`);
   
   const espnGames = await fetchESPNGames(sport);
-  console.log(`Found ${espnGames.length} ESPN games for ${sport}`);
+  console.log(`[${sport}] ESPN returned ${espnGames.length} games`);
   
   const games = espnGames
     .map(game => convertESPNGameToGame(game, sport))
     .filter((game): game is Game => game !== null)
     .filter(game => game.status === 'scheduled' || game.status === 'live');
 
-  console.log(`Converted to ${games.length} valid games for ${sport}`);
+  console.log(`[${sport}] Converted to ${games.length} valid upcoming games`);
   
   if (games.length === 0) {
-    console.warn(`ESPN API failed for ${sport}, falling back to mock data`);
+    console.warn(`[${sport}] No ESPN data available - using mock data for demonstration`);
     return mockDataService.fetchUpcomingGames(sport);
   }
   
