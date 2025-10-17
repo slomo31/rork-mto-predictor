@@ -5,8 +5,7 @@ import { Platform } from 'react-native';
 const PROXY_BASE = '/api/fetch';
 
 const ESPN_BASES = [
-  'https://site.api.espn.com/apis/site/v2/sports',
-  'https://sports.core.api.espn.com/v2/sports'
+  'https://site.api.espn.com/apis/site/v2/sports'
 ];
 
 async function tryFetch(path: string): Promise<Response | null> {
@@ -24,31 +23,34 @@ async function tryFetch(path: string): Promise<Response | null> {
         },
       });
       
-      if (response.ok) {
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType.includes('application/json')) {
-          try {
-            const clonedResponse = response.clone();
-            const testData = await clonedResponse.json();
-            
-            if (testData.error) {
-              console.log(`✗ Proxy returned error for ${base}:`, testData.error);
-              continue;
-            }
-            
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          const clonedResponse = response.clone();
+          const testData = await clonedResponse.json();
+          
+          if (testData.error) {
+            console.log(`✗ Proxy returned error for ${base}:`, testData.error, `(status: ${testData.status || response.status})`);
+            continue;
+          }
+          
+          if (response.ok && testData.events !== undefined) {
             console.log(`✓ Success with base: ${base}`);
             return response;
-          } catch (e) {
-            console.log(`✗ Invalid JSON from ${base}`);
+          } else if (response.ok) {
+            console.log(`✓ Valid JSON response from ${base}`);
+            return response;
+          } else {
+            console.log(`✗ Non-200 response from ${base}: ${response.status}`);
           }
-        } else {
-          console.log(`✗ Non-JSON response from ${base}`);
+        } catch (e) {
+          console.log(`✗ Invalid JSON from ${base}:`, e);
         }
       } else {
-        console.log(`✗ Failed with status ${response.status} for base: ${base}`);
+        console.log(`✗ Non-JSON response from ${base} (${response.status})`);
       }
     } catch (error) {
-      console.log(`✗ Error with base ${base}:`, error);
+      console.log(`✗ Network error with base ${base}:`, error);
     }
   }
   
@@ -117,7 +119,7 @@ const SPORT_API_PATHS: Record<Sport, { league: string; sport: string } | null> =
   MLB: { league: 'baseball', sport: 'mlb' },
   NCAA_FB: { league: 'football', sport: 'college-football' },
   NCAA_BB: { league: 'basketball', sport: 'mens-college-basketball' },
-  SOCCER: { league: 'soccer', sport: 'eng.1' },
+  SOCCER: { league: 'soccer', sport: 'usa.1' },
   TENNIS: null,
 };
 

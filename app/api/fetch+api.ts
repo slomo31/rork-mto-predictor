@@ -12,7 +12,10 @@ export async function GET(request: Request) {
     const response = await fetch(targetUrl, {
       headers: {
         'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (compatible; MTO-Predictor/1.0)',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.espn.com/',
+        'Origin': 'https://www.espn.com',
       },
     });
 
@@ -23,24 +26,25 @@ export async function GET(request: Request) {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`[Proxy] Upstream error ${response.status}:`, errorText.substring(0, 200));
+      console.error(`[Proxy] Upstream error ${response.status}:`, errorText.substring(0, 500));
       return Response.json(
-        { error: `Upstream error: ${response.statusText}`, status: response.status },
+        { error: `ESPN API returned ${response.status}: ${response.statusText}`, status: response.status, details: errorText.substring(0, 200) },
         { status: 502 }
       );
     }
 
     if (!contentType || !contentType.includes('application/json')) {
       const text = await response.text();
-      console.error(`[Proxy] Non-JSON response:`, text.substring(0, 200));
+      console.error(`[Proxy] Non-JSON response:`, text.substring(0, 500));
       return Response.json(
-        { error: 'Non-JSON response from upstream', contentType },
+        { error: 'Non-JSON response from upstream', contentType, preview: text.substring(0, 200) },
         { status: 502 }
       );
     }
 
     const data = await response.json();
-    console.log(`[Proxy] Success - returned data with keys:`, Object.keys(data).join(', '));
+    const eventCount = data.events?.length || 0;
+    console.log(`[Proxy] Success - returned ${eventCount} events`);
     return Response.json(data);
   } catch (error) {
     console.error('[Proxy] Fetch error:', error);
