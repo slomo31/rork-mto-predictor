@@ -1,3 +1,6 @@
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
 const TTL_MS = 2 * 60 * 1000;
 const cache = new Map<string, { ts: number; data: any }>();
 
