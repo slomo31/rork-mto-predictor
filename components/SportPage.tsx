@@ -24,16 +24,27 @@ export default function SportPage({ sports, title, subtitle }: SportPageProps) {
   const gamesQuery = useQuery({
     queryKey: ['games', ...sports, selectedDate],
     queryFn: async () => {
-      console.log(`Fetching games for sports: ${sports.join(', ')} on ${selectedDate}`);
+      console.log(`\n========== SportPage Query Start ==========`);
+      console.log(`Date: ${selectedDate}`);
+      console.log(`Sports: ${sports.join(', ')}`);
+      console.log(`Time: ${new Date().toISOString()}`);
+      
       const allGames: Game[] = [];
       for (const sport of sports) {
+        console.log(`\nFetching ${sport} games...`);
         const games = await fetchUpcomingGames(sport, selectedDate);
-        console.log(`Got ${games.length} games for ${sport}`);
+        console.log(`✓ ${sport}: ${games.length} games`);
         allGames.push(...games);
       }
-      return allGames.sort((a, b) => new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime());
+      
+      const sorted = allGames.sort((a, b) => new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime());
+      console.log(`\n✓ Total games: ${sorted.length}`);
+      console.log(`========== SportPage Query End ==========\n`);
+      return sorted;
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
+    gcTime: 5 * 60 * 1000,
+    retry: 1,
   });
 
   const onRefresh = async () => {

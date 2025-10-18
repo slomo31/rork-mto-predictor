@@ -56,7 +56,10 @@ export async function GET(req: Request) {
     const key = process.env.ODDSAPI_KEY;
     const enabled = process.env.ENABLE_ODDSAPI;
     
+    console.log(`[OddsAPI Route] Request for sport=${sport}, key=${key ? 'present' : 'missing'}, enabled=${enabled}`);
+    
     if (!key || enabled !== 'true') {
+      console.log(`[OddsAPI Route] Not enabled or missing key, returning empty`);
       return okJSON({ source: 'none', games: [] });
     }
 
@@ -64,6 +67,7 @@ export async function GET(req: Request) {
     const now = Date.now();
     const cached = cache.get(ck);
     if (cached && now - cached.ts < TTL_MS) {
+      console.log(`[OddsAPI Route] Cache hit for ${sport}: ${cached.data.length} games`);
       return okJSON({ source: 'cache', games: cached.data });
     }
 
@@ -74,8 +78,10 @@ export async function GET(req: Request) {
       `&dateFormat=${encodeURIComponent(dateFormat)}` +
       `&apiKey=${encodeURIComponent(key)}`;
 
+    console.log(`[OddsAPI Route] Fetching: ${url.replace(key, 'REDACTED')}`);
     const rawData = await fetchWithRetry(url, 2);
     const fixtures = Array.isArray(rawData) ? rawData : [];
+    console.log(`[OddsAPI Route] Received ${fixtures.length} fixtures`);
     
     const games = fixtures.map((f: any) => {
       const totals: number[] = [];
@@ -112,9 +118,15 @@ export async function GET(req: Request) {
       };
     });
     
+    console.log(`[OddsAPI Route] Processed ${games.length} games`);
+    if (games.length > 0) {
+      console.log(`[OddsAPI Route] First game: ${games[0]?.away} @ ${games[0]?.home} at ${games[0]?.commenceTimeUTC}`);
+    }
+    
     cache.set(ck, { ts: now, data: games });
     return okJSON({ source: 'oddsapi', games });
   } catch (err: any) {
-    return okJSON({ source: 'none', games: [], error: 'OddsAPI proxy failed', detail: err }, 200);
+    console.error(`[OddsAPI Route] Error:`, err);
+    return okJSON({ source: 'none', games: [], error: 'OddsAPI proxy failed', detail: err.message || String(err) }, 200);
   }
 }

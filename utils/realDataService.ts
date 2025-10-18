@@ -56,8 +56,13 @@ const ODDSAPI_SPORT_KEYS: Partial<Record<Sport, string>> = {
 
 function getUTCWindow(isoDate: string): { start: number; end: number } {
   const [y, m, d] = isoDate.split('-').map(Number);
-  const start = Date.UTC(y!, m! - 1, d!, 0, 0, 0);
-  const end = Date.UTC(y!, m! - 1, d!, 23, 59, 59, 999);
+  const localStart = new Date(y!, m! - 1, d!, 0, 0, 0);
+  const localEnd = new Date(y!, m! - 1, d!, 23, 59, 59, 999);
+  
+  const start = localStart.getTime() - (12 * 60 * 60 * 1000);
+  const end = localEnd.getTime() + (12 * 60 * 60 * 1000);
+  
+  if (DEV) console.log(`[Date Window] ${isoDate}: ${new Date(start).toISOString()} to ${new Date(end).toISOString()}`);
   return { start, end };
 }
 
@@ -67,10 +72,16 @@ function withinWindow(utcMs: number, start: number, end: number): boolean {
 
 async function fetchFromOddsAPI(sport: Sport, isoDate: string): Promise<RawGame[]> {
   const sportKey = ODDSAPI_SPORT_KEYS[sport];
-  if (!sportKey) return [];
+  if (!sportKey) {
+    if (DEV) console.log(`[${sport}] No OddsAPI sport key configured`);
+    return [];
+  }
 
   try {
-    const res = await fetch(`/api/odds?sport=${encodeURIComponent(sportKey)}&regions=us&markets=totals`, {
+    const url = `/api/odds?sport=${encodeURIComponent(sportKey)}&regions=us&markets=totals`;
+    if (DEV) console.log(`[${sport}] Fetching from OddsAPI: ${url}`);
+    
+    const res = await fetch(url, {
       headers: { accept: 'application/json' },
       cache: 'no-store',
     });
@@ -81,30 +92,43 @@ async function fetchFromOddsAPI(sport: Sport, isoDate: string): Promise<RawGame[
     }
 
     const json = await res.json();
+    if (DEV) console.log(`[${sport}] OddsAPI response:`, JSON.stringify(json).slice(0, 200));
+    
     const games = Array.isArray(json?.games) ? json.games : [];
+    if (DEV) console.log(`[${sport}] OddsAPI returned ${games.length} total games`);
     
     const { start, end } = getUTCWindow(isoDate);
     const filtered = games.filter((g: RawGame) => {
       const t = new Date(g.commenceTimeUTC).getTime();
-      return withinWindow(t, start, end);
+      const matches = withinWindow(t, start, end);
+      if (DEV && !matches && games.length < 20) {
+        console.log(`  Filtered out: ${g.away} @ ${g.home} at ${g.commenceTimeUTC}`);
+      }
+      return matches;
     });
 
-    if (DEV) console.log(`[${sport}] OddsAPI: ${filtered.length} games on ${isoDate}`);
+    if (DEV) console.log(`[${sport}] OddsAPI: ${filtered.length} games match date ${isoDate}`);
     return filtered;
   } catch (e) {
-    if (DEV) console.warn(`[${sport}] OddsAPI error:`, e);
+    if (DEV) console.error(`[${sport}] OddsAPI error:`, e);
     return [];
   }
 }
 
 async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> {
   const api = SPORT_API_PATHS[sport];
-  if (!api) return [];
+  if (!api) {
+    if (DEV) console.log(`[${sport}] No ESPN API path configured`);
+    return [];
+  }
 
   try {
     const dates = toYyyymmddUTC(isoDate);
     const path = `/${api.league}/${api.sport}/scoreboard`;
-    const res = await fetch(`/api/espn?path=${encodeURIComponent(path)}&dates=${dates}`, {
+    const url = `/api/espn?path=${encodeURIComponent(path)}&dates=${dates}`;
+    if (DEV) console.log(`[${sport}] Fetching from ESPN: ${url}`);
+    
+    const res = await fetch(url, {
       headers: { accept: 'application/json' },
       cache: 'no-store',
     });
@@ -115,18 +139,25 @@ async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> 
     }
 
     const json = await res.json();
+    if (DEV) console.log(`[${sport}] ESPN response:`, JSON.stringify(json).slice(0, 200));
+    
     const games = Array.isArray(json?.games) ? json.games : [];
+    if (DEV) console.log(`[${sport}] ESPN returned ${games.length} total games`);
 
     const { start, end } = getUTCWindow(isoDate);
     const filtered = games.filter((g: RawGame) => {
       const t = new Date(g.commenceTimeUTC).getTime();
-      return withinWindow(t, start, end);
+      const matches = withinWindow(t, start, end);
+      if (DEV && !matches && games.length < 20) {
+        console.log(`  Filtered out: ${g.away} @ ${g.home} at ${g.commenceTimeUTC}`);
+      }
+      return matches;
     });
 
-    if (DEV) console.log(`[${sport}] ESPN: ${filtered.length} games on ${isoDate}`);
+    if (DEV) console.log(`[${sport}] ESPN: ${filtered.length} games match date ${isoDate}`);
     return filtered;
   } catch (e) {
-    if (DEV) console.warn(`[${sport}] ESPN error:`, e);
+    if (DEV) console.error(`[${sport}] ESPN error:`, e);
     return [];
   }
 }
@@ -175,25 +206,32 @@ export async function fetchUpcomingGames(sport: Sport, isoDate: string): Promise
   const sources = SOURCE_POLICY[sport] || ['oddsapi'];
   const results: { games: RawGame[]; source: 'oddsapi' | 'espn' }[] = [];
 
-  if (DEV) console.log(`[${sport}] ====== Fetching games for ${isoDate} ======`);
-  if (DEV) console.log(`[${sport}] Source policy: ${sources.join(' → ')}`);
+  console.log(`\n[${sport}] ====== Fetching games for ${isoDate} ======`);
+  console.log(`[${sport}] Source policy: ${sources.join(' → ')}`);
 
   for (const src of sources) {
+    console.log(`[${sport}] Trying source: ${src}`);
     const games = src === 'oddsapi'
       ? await fetchFromOddsAPI(sport, isoDate)
       : await fetchFromESPN(sport, isoDate);
     
+    console.log(`[${sport}] ${src} returned ${games.length} games`);
     results.push({ games, source: src });
+    
+    if (games.length > 0 && DEV) {
+      console.log(`[${sport}] First game from ${src}:`, games[0]);
+    }
   }
 
   const merged = dedupeAndMerge(results);
 
-  if (DEV) {
-    console.log(`[${sport}] ✓ Final: ${merged.length} games (sources: ${results.map(r => `${r.source}=${r.games.length}`).join(', ')})`);
+  console.log(`[${sport}] ✓ Final: ${merged.length} games (sources: ${results.map(r => `${r.source}=${r.games.length}`).join(', ')})`);
+  if (merged.length > 0 && DEV) {
     merged.forEach(g => {
-      console.log(`  [${g.source}] ${g.away} @ ${g.home}, Line: ${g.total ?? 'none'}, Books: ${g.numBooks ?? 0}`);
+      console.log(`  [${g.source}] ${g.away} @ ${g.home}, Time: ${g.commenceTimeUTC}, Line: ${g.total ?? 'none'}`);
     });
   }
+  console.log(`[${sport}] ====== End fetch ======\n`);
 
   return merged.map(g => ({
     id: `${sport}-${g.source}-${g.id}`,

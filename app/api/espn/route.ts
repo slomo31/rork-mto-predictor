@@ -68,6 +68,8 @@ export async function GET(req: Request) {
     const path = searchParams.get('path');
     const dates = searchParams.get('dates');
     
+    console.log(`[ESPN Route] Request for path=${path}, dates=${dates}`);
+    
     if (!path) return okJSON({ error: 'Missing path param' }, 400);
     
     const queryStr = dates ? `?dates=${dates}` : '';
@@ -76,19 +78,24 @@ export async function GET(req: Request) {
     const cached = cache.get(cacheKey);
     
     if (cached && now - cached.ts < TTL_MS) {
+      console.log(`[ESPN Route] Cache hit: ${cached.data.length} games`);
       return okJSON({ source: 'cache', games: cached.data });
     }
     
     let lastErr: any;
     for (const base of ESPN_BASES) {
       const url = `${base}${path}${queryStr}`;
+      console.log(`[ESPN Route] Trying: ${url}`);
       try {
         const json = await fetchWithRetry(url, 2);
         
         if (!json || !Array.isArray(json.events)) {
           lastErr = { error: 'No events array' };
+          console.log(`[ESPN Route] No events array in response`);
           continue;
         }
+        
+        console.log(`[ESPN Route] Received ${json.events.length} events`);
         
         const games = json.events.map((e: any) => {
           const comp = e?.competitions?.[0];
@@ -123,15 +130,23 @@ export async function GET(req: Request) {
           };
         }).filter(Boolean);
         
+        console.log(`[ESPN Route] Processed ${games.length} games`);
+        if (games.length > 0) {
+          console.log(`[ESPN Route] First game: ${games[0]?.away} @ ${games[0]?.home} at ${games[0]?.commenceTimeUTC}`);
+        }
+        
         cache.set(cacheKey, { ts: now, data: games });
         return okJSON({ source: 'espn', games });
       } catch (e: any) {
+        console.error(`[ESPN Route] Error with base ${base}:`, e);
         lastErr = e;
       }
     }
     
+    console.error(`[ESPN Route] All bases failed`);
     return okJSON({ source: 'none', games: [], error: 'All ESPN bases failed', detail: lastErr }, 200);
   } catch (err: any) {
+    console.error(`[ESPN Route] Top-level error:`, err);
     return okJSON({ source: 'none', games: [], error: 'ESPN proxy failed', detail: err.message }, 200);
   }
 }
