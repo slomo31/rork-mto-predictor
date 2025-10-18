@@ -34,15 +34,14 @@ const SOURCE_POLICY: Record<Sport, ('oddsapi' | 'espn')[]> = {
   TENNIS: ['oddsapi'],
 };
 
-const SPORT_API_PATHS: Record<Sport, { league: string; sport: string } | null> = {
-  NFL: { league: 'football', sport: 'nfl' },
-  NBA: { league: 'basketball', sport: 'nba' },
-  NHL: { league: 'hockey', sport: 'nhl' },
-  MLB: { league: 'baseball', sport: 'mlb' },
-  NCAA_FB: { league: 'football', sport: 'college-football' },
-  NCAA_BB: { league: 'basketball', sport: 'mens-college-basketball' },
-  SOCCER: { league: 'soccer', sport: 'usa.1' },
-  TENNIS: null,
+const ESPN_SPORT_KEYS: Partial<Record<Sport, string>> = {
+  NFL: 'nfl',
+  NBA: 'nba',
+  NHL: 'nhl',
+  MLB: 'mlb',
+  NCAA_FB: 'ncaa_fb',
+  NCAA_BB: 'ncaa_bb',
+  SOCCER: 'soccer',
 };
 
 const ODDSAPI_SPORT_KEYS: Partial<Record<Sport, string>> = {
@@ -63,7 +62,7 @@ async function fetchFromOddsAPI(sport: Sport): Promise<RawGame[]> {
   }
 
   try {
-    const url = `/api/odds?sportKey=${encodeURIComponent(sportKey)}`;
+    const url = `/api/odds+api?sportKey=${encodeURIComponent(sportKey)}`;
     console.log(`[${sport}] OddsAPI: Fetching ${url}`);
     
     const res = await fetch(url, {
@@ -96,16 +95,15 @@ async function fetchFromOddsAPI(sport: Sport): Promise<RawGame[]> {
 }
 
 async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> {
-  const api = SPORT_API_PATHS[sport];
-  if (!api) {
-    if (DEV) console.log(`[${sport}] No ESPN API path configured`);
+  const espnSportKey = ESPN_SPORT_KEYS[sport];
+  if (!espnSportKey) {
+    if (DEV) console.log(`[${sport}] No ESPN sport key configured`);
     return [];
   }
 
   try {
     const dates = toYyyymmddUTC(isoDate);
-    const path = `/${api.league}/${api.sport}/scoreboard`;
-    const url = `/api/espn?path=${encodeURIComponent(path)}&dates=${dates}`;
+    const url = `/api/espn+api?sport=${espnSportKey}&dates=${dates}`;
     if (DEV) console.log(`[${sport}] ESPN: Fetching ${url}`);
     
     const res = await fetch(url, {
@@ -207,8 +205,8 @@ async function fetchRecentTeamGamesFromScoreboards(
   fromIsoDate: string,
   maxGames = 10
 ): Promise<any[]> {
-  const api = SPORT_API_PATHS[sport];
-  if (!api) return [];
+  const espnSportKey = ESPN_SPORT_KEYS[sport];
+  if (!espnSportKey) return [];
 
   const collected: any[] = [];
   let cursor = new Date(fromIsoDate);
@@ -221,8 +219,7 @@ async function fetchRecentTeamGamesFromScoreboards(
 
     try {
       const dates = toYyyymmddUTC(iso);
-      const path = `/${api.league}/${api.sport}/scoreboard`;
-      const res = await fetch(`/api/espn?path=${encodeURIComponent(path)}&dates=${dates}`, {
+      const res = await fetch(`/api/espn+api?sport=${espnSportKey}&dates=${dates}`, {
         headers: { accept: 'application/json' },
         cache: 'no-store',
       });
