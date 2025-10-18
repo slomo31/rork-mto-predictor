@@ -1,4 +1,3 @@
-// app/api/espn+api.ts
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
@@ -30,12 +29,11 @@ export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const requestedSport = String(url.searchParams.get('sport') || 'nba').toLowerCase();
-    const dates = url.searchParams.get('dates') || ''; // e.g. 20251018 (YYYYMMDD)
+    const dates = url.searchParams.get('dates') || '';
 
     const sportPath = ESPN_SPORT_PATHS[requestedSport];
-    if (!sportPath) return okJSON({ ok: true, games: [] }); // unknown sport -> empty but OK
+    if (!sportPath) return okJSON({ ok: true, games: [] });
 
-    // cache key
     const cacheKey = `espn:${requestedSport}:${dates || 'today'}`;
     const now = Date.now();
     const cached = cache.get(cacheKey);
@@ -47,22 +45,24 @@ export async function GET(req: Request) {
     const timeout = setTimeout(() => controller.abort(), 12_000);
 
     try {
-      // ESPN web API endpoint (no key required)
       const query = dates ? `?dates=${encodeURIComponent(dates)}` : '';
       const fetchUrl = `https://site.web.api.espn.com/apis/v2/sports/${sportPath}/scoreboard${query}`;
 
       const response = await fetch(fetchUrl, {
         signal: controller.signal,
         headers: {
-          Accept: 'application/json',
-          'User-Agent': 'SportsApp/1.0',
+          Accept: 'application/json, text/plain, */*',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          Referer: 'https://www.espn.com/',
+          'Accept-Language': 'en-US,en;q=0.9',
+          Pragma: 'no-cache',
+          'Cache-Control': 'no-cache',
         },
       });
       clearTimeout(timeout);
 
       const txt = await response.text();
 
-      // Guard against HTML/app-shell responses so we don't crash on JSON.parse
       if (!txt || txt.trim().length === 0) {
         return okJSON({ ok: false, error: 'Empty response from ESPN', games: [] });
       }
@@ -97,8 +97,8 @@ export async function GET(req: Request) {
             homeLogo: home?.team?.logo,
             awayLogo: away?.team?.logo,
             venue: comp?.venue?.fullName,
-            commenceTimeUTC: event?.date, // ISO timestamp
-            total: comp?.odds?.[0]?.overUnder, // sometimes undefined
+            commenceTimeUTC: event?.date,
+            total: comp?.odds?.[0]?.overUnder,
             status:
               event?.status?.type?.name === 'STATUS_FINAL'
                 ? 'post'
@@ -124,4 +124,15 @@ export async function GET(req: Request) {
   } catch (err: any) {
     return okJSON({ ok: false, error: err?.message || 'Unknown error occurred', games: [] });
   }
+}
+
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET,OPTIONS',
+      'access-control-allow-headers': 'content-type',
+    },
+  });
 }

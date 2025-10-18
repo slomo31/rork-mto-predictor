@@ -1,4 +1,3 @@
-// app/api/odds+api.ts
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
@@ -24,7 +23,6 @@ function okJSON(data: any, status = 200) {
     status,
     headers: {
       'content-type': 'application/json',
-      // cache for CDN / browser, but keep it short while developing
       'cache-control': 'public, s-maxage=120, stale-while-revalidate=120',
     },
   });
@@ -55,23 +53,18 @@ export async function GET(req: Request) {
     const sportKey =
       SPORT_KEY_MAPPING[String(requested).toLowerCase()] || String(requested);
 
-    // Expo Router +api on web only exposes EXPO_PUBLIC_* at runtime.
     const KEY =
-      process.env.EXPO_PUBLIC_ODDSAPI_KEY || process.env.ODDSAPI_KEY || '';
+      (process.env.EXPO_PUBLIC_ODDSAPI_KEY || process.env.ODDSAPI_KEY || '').trim();
     const enabled =
-      process.env.EXPO_PUBLIC_ENABLE_ODDSAPI ||
-      process.env.ENABLE_ODDSAPI ||
-      'true';
+      (process.env.EXPO_PUBLIC_ENABLE_ODDSAPI || process.env.ENABLE_ODDSAPI || 'true').trim();
 
     if (!KEY) {
       return okJSON({ ok: false, error: 'No API key configured', games: [] });
     }
     if (enabled !== 'true') {
-      // feature-flag off: report success with empty list so UI stays happy
       return okJSON({ ok: true, games: [] });
     }
 
-    // in-memory cache
     const now = Date.now();
     const cacheKey = `odds:${sportKey}`;
     const cached = cache.get(cacheKey);
@@ -83,7 +76,7 @@ export async function GET(req: Request) {
     const timeout = setTimeout(() => controller.abort(), 10_000);
 
     try {
-      const fetchUrl = `${API_BASE}/${sportKey}/odds?apiKey=${encodeURIComponent(
+      const fetchUrl = `${API_BASE}/${encodeURIComponent(sportKey)}/odds?apiKey=${encodeURIComponent(
         KEY
       )}&markets=totals&oddsFormat=american&regions=us`;
 
@@ -99,19 +92,12 @@ export async function GET(req: Request) {
 
       const responseText = await response.text();
 
-      // Guard against HTML/error pages from proxies, etc.
       if (!responseText || responseText.trim().length === 0) {
         return okJSON({ ok: false, error: 'Empty response', games: [] });
       }
-      if (
-        responseText.trim().startsWith('<!DOCTYPE') ||
-        responseText.trim().startsWith('<html')
-      ) {
-        return okJSON({
-          ok: false,
-          error: 'HTML error page - check API key / endpoint',
-          games: [],
-        });
+      const trimmed = responseText.trim();
+      if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html')) {
+        return okJSON({ ok: false, error: 'HTML error page - check API key / endpoint', games: [] });
       }
 
       let rawData: any;
@@ -127,21 +113,13 @@ export async function GET(req: Request) {
         if (response.status === 429)
           return okJSON({ ok: false, error: 'Rate limit exceeded', games: [] });
         if (response.status === 400)
-          return okJSON({
-            ok: false,
-            error: `Invalid sport key: ${sportKey}`,
-            games: [],
-          });
-        return okJSON(
-          { ok: false, error: `HTTP ${response.status}`, games: [] },
-          response.status
-        );
+          return okJSON({ ok: false, error: `Invalid sport key: ${sportKey}`, games: [] });
+        return okJSON({ ok: false, error: `HTTP ${response.status}`, games: [] }, response.status);
       }
 
-      // API sometimes returns an object with error info instead of an array
       if (rawData && typeof rawData === 'object' && !Array.isArray(rawData)) {
-        if (rawData.message)
-          return okJSON({ ok: false, error: rawData.message, games: [] });
+        if ((rawData as any).message)
+          return okJSON({ ok: false, error: (rawData as any).message, games: [] });
       }
 
       const games = (Array.isArray(rawData) ? rawData : [])
@@ -153,9 +131,7 @@ export async function GET(req: Request) {
             (bookmaker?.markets ?? []).forEach((market: any) => {
               if (market?.key === 'totals') {
                 (market?.outcomes ?? []).forEach((outcome: any) => {
-                  if (typeof outcome?.point === 'number') {
-                    totals.push(outcome.point);
-                  }
+                  if (typeof outcome?.point === 'number') totals.push(outcome.point);
                 });
               }
             });
@@ -172,9 +148,7 @@ export async function GET(req: Request) {
             source: 'oddsapi' as const,
           };
         })
-        .filter(
-          (g: any) => g.home && g.away && typeof g.commenceTimeUTC === 'string'
-        );
+        .filter((g: any) => g.home && g.away && typeof g.commenceTimeUTC === 'string');
 
       cache.set(cacheKey, { ts: now, data: games });
       return okJSON({ ok: true, games });
@@ -183,13 +157,20 @@ export async function GET(req: Request) {
       if (fetchError?.name === 'AbortError') {
         return okJSON({ ok: false, error: 'Request timeout', games: [] });
       }
-      return okJSON({
-        ok: false,
-        error: fetchError?.message || 'Fetch failed',
-        games: [],
-      });
+      return okJSON({ ok: false, error: fetchError?.message || 'Fetch failed', games: [] });
     }
   } catch (err: any) {
     return okJSON({ ok: false, error: err?.message || 'Unknown error', games: [] });
   }
+}
+
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET,OPTIONS',
+      'access-control-allow-headers': 'content-type',
+    },
+  });
 }

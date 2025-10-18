@@ -78,7 +78,7 @@ function dedupeAlt(items: { line: number; over_price?: number; under_price?: num
 
 export async function getOddsFeatures(sportKey: string): Promise<OddsFeatures> {
   try {
-    const res = await fetch(`/api/odds?sport=${encodeURIComponent(sportKey)}&regions=us&markets=totals,alternate_totals`, {
+    const res = await fetch(`/api/odds+api?sport=${encodeURIComponent(sportKey)}&regions=us&markets=totals,alternate_totals`, {
       headers: { accept: 'application/json' },
       cache: 'no-store',
     });
@@ -140,7 +140,7 @@ function teamsMatch(aHome: string, aAway: string, bHome: string, bAway: string) 
 
 export async function getOddsForGame(sportKey: string, home: string, away: string) {
   try {
-    const res = await fetch(`/api/odds?sport=${encodeURIComponent(sportKey)}&regions=us&markets=totals,alternate_totals`, {
+    const res = await fetch(`/api/odds+api?sport=${encodeURIComponent(sportKey)}&regions=us&markets=totals,alternate_totals`, {
       headers: { accept: 'application/json' },
       cache: 'no-store',
     });
@@ -177,7 +177,7 @@ export async function getFixturesForDate(
   isoDate: string
 ): Promise<OddsFixture[]> {
   try {
-    const base = '/api/odds';
+    const base = '/api/odds+api';
     const params = new URLSearchParams({
       sport: sportKey,
       regions: 'us',
