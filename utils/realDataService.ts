@@ -57,34 +57,57 @@ const ODDSAPI_SPORT_KEYS: Partial<Record<Sport, string>> = {
 async function fetchFromOddsAPI(sport: Sport, isoDate: string): Promise<RawGame[]> {
   const sportKey = ODDSAPI_SPORT_KEYS[sport];
   if (!sportKey) {
-    if (DEV) console.log(`[${sport}] No OddsAPI sport key configured`);
+    console.log(`[${sport}] No OddsAPI sport key configured`);
     return [];
   }
 
   try {
     const url = `/api/odds?sport=${encodeURIComponent(sportKey)}&regions=us&markets=totals`;
-    if (DEV) console.log(`[${sport}] Fetching from OddsAPI: ${url}`);
+    console.log(`[${sport}] OddsAPI: Fetching ${url}`);
     
     const res = await fetch(url, {
       headers: { accept: 'application/json' },
       cache: 'no-store',
     });
 
+    console.log(`[${sport}] OddsAPI: Response status ${res.status}`);
+    
     if (!res.ok) {
-      if (DEV) console.warn(`[${sport}] OddsAPI HTTP ${res.status}`);
+      console.warn(`[${sport}] OddsAPI: HTTP error ${res.status}`);
+      const text = await res.text();
+      console.warn(`[${sport}] OddsAPI: Response body:`, text.substring(0, 500));
       return [];
     }
 
     const json = await res.json();
-    if (DEV) console.log(`[${sport}] OddsAPI response:`, JSON.stringify(json).slice(0, 200));
+    console.log(`[${sport}] OddsAPI: Response structure:`, {
+      hasGames: !!json?.games,
+      isArray: Array.isArray(json?.games),
+      source: json?.source,
+      error: json?.error
+    });
+    
+    if (json?.error) {
+      console.error(`[${sport}] OddsAPI: API returned error:`, json.error);
+      console.error(`[${sport}] OddsAPI: Error detail:`, json.detail);
+    }
     
     const games = Array.isArray(json?.games) ? json.games : [];
-    if (DEV) console.log(`[${sport}] OddsAPI returned ${games.length} total games`);
+    console.log(`[${sport}] OddsAPI: ✓ ${games.length} games received`);
     
-    console.log(`[${sport}] OddsAPI: Returning all ${games.length} games (filtering disabled)`);
+    if (games.length > 0) {
+      console.log(`[${sport}] OddsAPI: Sample game:`, {
+        home: games[0]?.home,
+        away: games[0]?.away,
+        time: games[0]?.commenceTimeUTC,
+        total: games[0]?.total
+      });
+    }
+    
     return games;
-  } catch (e) {
-    if (DEV) console.error(`[${sport}] OddsAPI error:`, e);
+  } catch (e: any) {
+    console.error(`[${sport}] OddsAPI: Exception:`, e.message || e);
+    console.error(`[${sport}] OddsAPI: Stack:`, e.stack);
     return [];
   }
 }
