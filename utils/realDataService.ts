@@ -285,7 +285,18 @@ async function fetchRecentAveragesFromSchedule(
       const normTeam = normalizeTeam(teamId);
       const isHome = normHome === normTeam || g.homeId === teamId;
 
-      recentForm.push(isHome ? 0 : 0);
+      const homeScore = typeof g.homeScore === 'number' ? g.homeScore : 0;
+      const awayScore = typeof g.awayScore === 'number' ? g.awayScore : 0;
+
+      if (isHome) {
+        ptsFor += homeScore;
+        ptsAgainst += awayScore;
+        recentForm.push(homeScore);
+      } else {
+        ptsFor += awayScore;
+        ptsAgainst += homeScore;
+        recentForm.push(awayScore);
+      }
     }
 
     const gp = recent.length;

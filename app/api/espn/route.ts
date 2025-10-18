@@ -100,6 +100,8 @@ export async function GET(req: Request) {
           if (!home || !away) return null;
           
           const line = comp.odds?.[0]?.overUnder;
+          const homeScore = home.score ? parseFloat(home.score) : undefined;
+          const awayScore = away.score ? parseFloat(away.score) : undefined;
           
           return {
             id: e.id,
@@ -109,6 +111,8 @@ export async function GET(req: Request) {
             awayId: away.team?.id,
             homeLogo: home.team?.logo,
             awayLogo: away.team?.logo,
+            homeScore,
+            awayScore,
             commenceTimeUTC: e.date,
             venue: comp.venue?.fullName,
             status: e.status?.type?.state,
