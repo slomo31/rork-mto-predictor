@@ -1,3 +1,5 @@
+import { buildApiUrl } from '@/utils/apiUrl';
+
 export type OddsFeatures = {
   market_total_mean?: number;
   market_total_median?: number;
@@ -78,7 +80,7 @@ function dedupeAlt(items: { line: number; over_price?: number; under_price?: num
 
 export async function getOddsFeatures(sportKey: string): Promise<OddsFeatures> {
   try {
-    const res = await fetch(`/api/odds-api?sport=${encodeURIComponent(sportKey)}&regions=us&markets=totals,alternate_totals`, {
+    const res = await fetch(buildApiUrl(`/api/odds-api?sport=${encodeURIComponent(sportKey)}&regions=us&markets=totals,alternate_totals`), {
       headers: { accept: 'application/json' },
       cache: 'no-store',
     });
@@ -140,7 +142,7 @@ function teamsMatch(aHome: string, aAway: string, bHome: string, bAway: string) 
 
 export async function getOddsForGame(sportKey: string, home: string, away: string) {
   try {
-    const res = await fetch(`/api/odds-api?sport=${encodeURIComponent(sportKey)}&regions=us&markets=totals,alternate_totals`, {
+    const res = await fetch(buildApiUrl(`/api/odds-api?sport=${encodeURIComponent(sportKey)}&regions=us&markets=totals,alternate_totals`), {
       headers: { accept: 'application/json' },
       cache: 'no-store',
     });
@@ -177,7 +179,7 @@ export async function getFixturesForDate(
   isoDate: string
 ): Promise<OddsFixture[]> {
   try {
-    const base = '/api/odds-api';
+    const baseUrl = buildApiUrl('/api/odds-api');
     const params = new URLSearchParams({
       sport: sportKey,
       regions: 'us',
@@ -185,7 +187,7 @@ export async function getFixturesForDate(
       oddsFormat: 'american',
       dateFormat: 'iso',
     });
-    const res = await fetch(`${base}?${params.toString()}`, { cache: 'no-store' });
+    const res = await fetch(`${baseUrl}?${params.toString()}`, { cache: 'no-store', headers: { accept: 'application/json' } });
     if (!res.ok) throw new Error(`Odds fixtures failed: ${res.status}`);
     const json = await res.json();
     const data = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
