@@ -80,14 +80,20 @@ export default function GameCard({ game, isoDate }: GameCardProps) {
 
       <View style={styles.predictionContainer}>
         <View style={styles.mtoBox}>
-          <Text style={styles.mtoLabel}>Predicted MTO</Text>
-          <Text style={styles.mtoValue}>{prediction.predictedMTO.toFixed(1)}</Text>
+          <Text style={styles.mtoLabel}>MTO Floor ({Math.round(prediction.coverage_target * 100)}%)</Text>
+          <Text style={styles.mtoValue}>{prediction.mto_floor.toFixed(1)}</Text>
+          <Text style={styles.expectedLabel}>Expected: {prediction.expected_total.toFixed(1)}</Text>
           {prediction.sportsbookLine ? (
             <Text style={styles.lineText}>Line: {prediction.sportsbookLine.toFixed(1)}</Text>
           ) : (
             <View style={styles.noLineContainer}>
               <Text style={styles.noLineText}>No line yet</Text>
               <Text style={styles.modelOnlyBadge}>Model only</Text>
+            </View>
+          )}
+          {prediction.stay_away && (
+            <View style={styles.stayAwayBadge}>
+              <Text style={styles.stayAwayText}>⚠ STAY AWAY</Text>
             </View>
           )}
         </View>
@@ -105,6 +111,15 @@ export default function GameCard({ game, isoDate }: GameCardProps) {
               Data: {Math.round(prediction.dataCompleteness * 100)}%
             </Text>
           </View>
+          {prediction.notes && prediction.notes.length > 0 && (
+            <View style={styles.notesBadgeContainer}>
+              {prediction.notes.slice(0, 3).map((note, idx) => (
+                <View key={idx} style={styles.noteBadge}>
+                  <Text style={styles.noteBadgeText}>{note}</Text>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
       </View>
 
@@ -117,16 +132,15 @@ export default function GameCard({ game, isoDate }: GameCardProps) {
         />
       )}
 
-      {process.env.NODE_ENV !== 'production' && prediction.marketData && prediction.marketData.source !== 'none' && (
+      {process.env.NODE_ENV !== 'production' && (
         <View style={styles.devRibbon}>
           <Text style={styles.devRibbonText}>
-            Model μ {(prediction.marketData.market_total_mean ? 
-              ((prediction.predictedMTO / 0.85) * 1.0).toFixed(1) : '—')} | 
-            Market {prediction.marketData.market_total_mean?.toFixed(1) ?? '—'} 
-            (w={((prediction.keyFactors.find(f => f.factor === 'Market Data Integration')?.weight ?? 0) * 100).toFixed(0)}%, 
-            std={prediction.marketData.market_total_std?.toFixed(1) ?? '—'}, 
-            books={prediction.marketData.num_books ?? 0}) → 
-            Floor {prediction.predictedMTO.toFixed(1)}
+            μ_model={prediction.expected_total.toFixed(1)} | 
+            {prediction.marketData?.market_total_mean ? `μ_market=${prediction.marketData.market_total_mean.toFixed(1)}` : 'no market'} | 
+            σ={(prediction.marketData?.market_total_std?.toFixed(1) ?? '—')} | 
+            q={((1 - prediction.coverage_target) * 100).toFixed(0)}% | 
+            Floor={prediction.mto_floor.toFixed(1)} | 
+            {prediction.notes?.join(',') ?? 'no-penalties'}
           </Text>
         </View>
       )}
@@ -309,6 +323,48 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
     fontWeight: '500' as const,
+  },
+  expectedLabel: {
+    color: '#94a3b8',
+    fontSize: 12,
+    marginTop: 4,
+    fontWeight: '500' as const,
+  },
+  stayAwayBadge: {
+    marginTop: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: '#ef444420',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#ef4444',
+    alignItems: 'center',
+  },
+  stayAwayText: {
+    color: '#ef4444',
+    fontSize: 11,
+    fontWeight: '700' as const,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
+  },
+  notesBadgeContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginTop: 6,
+  },
+  noteBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: '#3b82f620',
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#3b82f640',
+  },
+  noteBadgeText: {
+    color: '#60a5fa',
+    fontSize: 9,
+    fontWeight: '600' as const,
   },
   noLineContainer: {
     marginTop: 6,

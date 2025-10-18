@@ -18,6 +18,11 @@ export interface GameContext {
   restDays: number;
   injuries: InjuryReport[];
   travelDistance?: number;
+  conference?: string;
+  earlySeason?: boolean;
+  rivarly?: boolean;
+  defensiveRankHome?: number;
+  defensiveRankAway?: number;
 }
 
 export interface WeatherCondition {
@@ -26,6 +31,7 @@ export interface WeatherCondition {
   windSpeed?: number;
   precipitation?: boolean;
   indoor: boolean;
+  rain?: boolean;
 }
 
 export interface InjuryReport {
@@ -41,10 +47,15 @@ export interface MTOPrediction {
   awayTeam: string;
   gameDate: string;
   predictedMTO: number;
+  expected_total: number;
+  mto_floor: number;
+  coverage_target: number;
+  stay_away: boolean;
   confidence: number;
   sportsbookLine?: number;
   keyFactors: KeyFactor[];
   dataCompleteness: number;
+  notes?: string[];
   marketData?: {
     market_total_mean?: number;
     market_total_std?: number;
