@@ -3,6 +3,7 @@ import fetch from "node-fetch";
 import 'dotenv/config';
 import http from 'http';
 
+const KEY = process.env.ODDS_API_KEY;
 const PORT = process.env.API_PORT || 3000;
 const HOST = process.env.API_HOST || "0.0.0.0";
 const TTL_MS = 2 * 60 * 1000;
