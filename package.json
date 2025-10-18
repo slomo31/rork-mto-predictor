@@ -1,3 +1,10 @@
+"scripts": {
+  "start": "bunx rork start -p mc61hufg7cbu8p7ztjq6f --tunnel",
+  "start-web": "bunx rork start -p mc61hufg7cbu8p7ztjq6f --web --tunnel",
+  "start-web-dev": "DEBUG=expo* bunx rork start -p mc61hufg7cbu8p7ztjq6f --web --tunnel",
+  "lint": "expo lint",
+  "dev:api": "node server.mjs"
+},
 {
   "name": "expo-app",
   "main": "expo-router/entry",
