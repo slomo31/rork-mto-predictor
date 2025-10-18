@@ -50,6 +50,7 @@ function summarizeTotals(events: OddsEvent[]): OddsFeatures {
   }
 
   if (totals.length === 0) return { source: 'none' };
+
   const mean = totals.reduce((a, b) => a + b, 0) / totals.length;
   const sorted = [...totals].sort((a, b) => a - b);
   const median = sorted[Math.floor(sorted.length / 2)];
@@ -80,13 +81,22 @@ function dedupeAlt(items: { line: number; over_price?: number; under_price?: num
 
 export async function getOddsFeatures(sportKey: string): Promise<OddsFeatures> {
   try {
-    const res = await fetch(buildApiUrl(`/api/odds-api?sport=${encodeURIComponent(sportKey)}&regions=us&markets=totals,alternate_totals`), {
+    const url = buildApiUrl(
+      `/api/odds-api?sportKey=${encodeURIComponent(
+        sportKey
+      )}&regions=us&markets=totals,alternate_totals`
+    );
+    const res = await fetch(url, {
       headers: { accept: 'application/json' },
       cache: 'no-store',
     });
     if (!res.ok) return { source: 'none' };
     const payload = await res.json();
-    const data: OddsEvent[] = Array.isArray(payload?.data) ? payload.data : [];
+    const data: OddsEvent[] = Array.isArray(payload?.data)
+      ? payload.data
+      : Array.isArray(payload)
+      ? payload
+      : [];
     return summarizeTotals(data);
   } catch {
     return { source: 'none' };
@@ -101,15 +111,15 @@ const ALIASES: Record<string, string> = {
   'ny islanders': 'new york islanders',
   'ny jets': 'new york jets',
   'ny giants': 'new york giants',
-  'ucf': 'central florida',
+  ucf: 'central florida',
   'miami fl': 'miami',
   'miami (fl)': 'miami',
-  'usc': 'southern california',
-  'lsu': 'louisiana state',
+  usc: 'southern california',
+  lsu: 'louisiana state',
   'ole miss': 'mississippi',
-  'tcu': 'texas christian',
-  'smu': 'southern methodist',
-  'byu': 'brigham young',
+  tcu: 'texas christian',
+  smu: 'southern methodist',
+  byu: 'brigham young',
   'la rams': 'los angeles rams',
   'la chargers': 'los angeles chargers',
   'washington commanders': 'washington',
@@ -123,6 +133,7 @@ const ALIASES: Record<string, string> = {
   'mississippi state': 'mississippi st',
   'nc state': 'north carolina st',
   'ohio state': 'ohio st',
+  oklahoma: 'oklahoma',
   'oklahoma state': 'oklahoma st',
   'oregon state': 'oregon st',
   'penn state': 'penn st',
@@ -136,24 +147,40 @@ export function normalizeTeam(s: string): string {
 }
 
 function teamsMatch(aHome: string, aAway: string, bHome: string, bAway: string) {
-  const ah = normalizeTeam(aHome), aa = normalizeTeam(aAway), bh = normalizeTeam(bHome), ba = normalizeTeam(bAway);
+  const ah = normalizeTeam(aHome),
+    aa = normalizeTeam(aAway),
+    bh = normalizeTeam(bHome),
+    ba = normalizeTeam(bAway);
   return (ah === bh && aa === ba) || (ah === ba && aa === bh);
 }
 
-export async function getOddsForGame(sportKey: string, home: string, away: string) {
+export async function getOddsForGame(
+  sportKey: string,
+  home: string,
+  away: string
+): Promise<OddsFeatures> {
   try {
-    const res = await fetch(buildApiUrl(`/api/odds-api?sport=${encodeURIComponent(sportKey)}&regions=us&markets=totals,alternate_totals`), {
+    const url = buildApiUrl(
+      `/api/odds-api?sportKey=${encodeURIComponent(
+        sportKey
+      )}&regions=us&markets=totals,alternate_totals`
+    );
+    const res = await fetch(url, {
       headers: { accept: 'application/json' },
       cache: 'no-store',
     });
     if (!res.ok) return { source: 'none' as const };
     const payload = await res.json();
-    const events: OddsEvent[] = Array.isArray(payload?.data) ? payload.data : [];
+    const events: OddsEvent[] = Array.isArray(payload?.data)
+      ? payload.data
+      : Array.isArray(payload)
+      ? payload
+      : [];
     const found = events.find(e => teamsMatch(home, away, e.home_team, e.away_team));
     if (!found) return { source: 'none' as const };
 
     const summary = summarizeTotals([found]);
-    const sourceFromPayload = (payload?.source ?? 'oddsapi') as 'oddsapi'|'cache';
+    const sourceFromPayload = (payload?.source ?? 'oddsapi') as 'oddsapi' | 'cache';
     return { ...summary, source: sourceFromPayload };
   } catch {
     return { source: 'none' as const };
@@ -176,18 +203,21 @@ export type OddsFixture = {
 
 export async function getFixturesForDate(
   sportKey: string,
-  isoDate: string
+  _isoDate: string // reserved for future server-side filtering
 ): Promise<OddsFixture[]> {
   try {
     const baseUrl = buildApiUrl('/api/odds-api');
     const params = new URLSearchParams({
-      sport: sportKey,
+      sportKey: sportKey,
       regions: 'us',
       markets: 'totals',
       oddsFormat: 'american',
       dateFormat: 'iso',
     });
-    const res = await fetch(`${baseUrl}?${params.toString()}`, { cache: 'no-store', headers: { accept: 'application/json' } });
+    const res = await fetch(`${baseUrl}?${params.toString()}`, {
+      cache: 'no-store',
+      headers: { accept: 'application/json' },
+    });
     if (!res.ok) throw new Error(`Odds fixtures failed: ${res.status}`);
     const json = await res.json();
     const data = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
@@ -211,5 +241,5 @@ export function extractConsensusTotal(fix: OddsFixture): number | undefined {
   if (!totals.length) return undefined;
   totals.sort((a, b) => a - b);
   const mid = Math.floor(totals.length / 2);
-  return totals.length % 2 ? totals[mid] : (totals[mid! - 1]! + totals[mid]!) / 2;
+  return totals.length % 2 ? totals[mid] : (totals[mid - 1]! + totals[mid]!) / 2;
 }
