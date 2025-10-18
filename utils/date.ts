@@ -30,13 +30,30 @@ export function localDayRange(isoDate: string) {
 
 export function isISOWithinLocalDate(isoDateTime: string, isoDate: string) {
   const gameDate = new Date(isoDateTime);
+  const gameUTCDateStr = gameDate.toISOString().slice(0, 10);
   const gameLocalDateStr = `${gameDate.getFullYear()}-${String(gameDate.getMonth() + 1).padStart(2, '0')}-${String(gameDate.getDate()).padStart(2, '0')}`;
   
-  const matches = gameLocalDateStr === isoDate;
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const targetDate = new Date(y!, (m! - 1), d!);
+  const targetUTCStr = targetDate.toISOString().slice(0, 10);
+  
+  const prevDay = new Date(targetDate);
+  prevDay.setDate(prevDay.getDate() - 1);
+  const prevDayStr = prevDay.toISOString().slice(0, 10);
+  
+  const nextDay = new Date(targetDate);
+  nextDay.setDate(nextDay.getDate() + 1);
+  const nextDayStr = nextDay.toISOString().slice(0, 10);
+  
+  const matchesExact = gameLocalDateStr === isoDate;
+  const matchesUTC = gameUTCDateStr === targetUTCStr;
+  const matchesPrevDay = gameUTCDateStr === prevDayStr;
+  const matchesNextDay = gameUTCDateStr === nextDayStr;
+  
+  const matches = matchesExact || matchesUTC || matchesPrevDay || matchesNextDay;
   
   if (process.env.NODE_ENV !== 'production') {
-    console.log(`[Date Filter] Game local date: ${gameLocalDateStr} vs Filter: ${isoDate}, Match: ${matches}`);
-    console.log(`  Original game time (UTC): ${isoDateTime}`);
+    console.log(`[Date Filter] Game UTC: ${gameUTCDateStr}, Local: ${gameLocalDateStr}, Target: ${isoDate}, Match: ${matches}`);
   }
   
   return matches;

@@ -1,7 +1,7 @@
 import { Game, Sport, TeamStats, GameContext, CalculationInput } from '@/types/sports';
 import { getLeagueAverages } from './mtoEngine';
 import { normalizeTeam } from './OddsService';
-import { toYyyymmddUTC, isISOWithinLocalDate } from './date';
+import { toYyyymmddUTC } from './date';
 
 const DEV = process.env.NODE_ENV !== 'production';
 
@@ -81,18 +81,8 @@ async function fetchFromOddsAPI(sport: Sport, isoDate: string): Promise<RawGame[
     const games = Array.isArray(json?.games) ? json.games : [];
     if (DEV) console.log(`[${sport}] OddsAPI returned ${games.length} total games`);
     
-    const filtered = games.filter((g: RawGame) => {
-      if (!g.commenceTimeUTC) return false;
-      const matches = isISOWithinLocalDate(g.commenceTimeUTC, isoDate);
-      if (DEV && !matches) {
-        const gameDate = new Date(g.commenceTimeUTC).toISOString().slice(0, 10);
-        console.log(`  [${sport}] Filtered out: ${g.away} @ ${g.home} (${gameDate} vs ${isoDate})`);
-      }
-      return matches;
-    });
-    
-    console.log(`[${sport}] OddsAPI: ${filtered.length}/${games.length} games match date ${isoDate}`);
-    return filtered;
+    console.log(`[${sport}] OddsAPI: Returning all ${games.length} games (filtering disabled)`);
+    return games;
   } catch (e) {
     if (DEV) console.error(`[${sport}] OddsAPI error:`, e);
     return [];
@@ -128,18 +118,8 @@ async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> 
     const games = Array.isArray(json?.games) ? json.games : [];
     if (DEV) console.log(`[${sport}] ESPN returned ${games.length} total games`);
 
-    const filtered = games.filter((g: RawGame) => {
-      if (!g.commenceTimeUTC) return false;
-      const matches = isISOWithinLocalDate(g.commenceTimeUTC, isoDate);
-      if (DEV && !matches) {
-        const gameDate = new Date(g.commenceTimeUTC).toISOString().slice(0, 10);
-        console.log(`  [${sport}] Filtered out: ${g.away} @ ${g.home} (${gameDate} vs ${isoDate})`);
-      }
-      return matches;
-    });
-
-    console.log(`[${sport}] ESPN: ${filtered.length}/${games.length} games match date ${isoDate}`);
-    return filtered;
+    console.log(`[${sport}] ESPN: Returning all ${games.length} games (filtering disabled)`);
+    return games;
   } catch (e) {
     if (DEV) console.error(`[${sport}] ESPN error:`, e);
     return [];
