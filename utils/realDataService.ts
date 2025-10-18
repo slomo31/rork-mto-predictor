@@ -115,8 +115,8 @@ async function fetchFromOddsAPI(sport: Sport): Promise<RawGame[]> {
   }
 
   try {
-    const primaryUrl = buildApiUrl(`/api/odds+api?sportKey=${encodeURIComponent(sportKey)}`);
-    const fallbackUrl = buildApiUrl(`/api/odds+api/?sportKey=${encodeURIComponent(sportKey)}`);
+    const primaryUrl = buildApiUrl(`/api/odds-api?sportKey=${encodeURIComponent(sportKey)}`);
+    const fallbackUrl = buildApiUrl(`/api/odds-api/?sportKey=${encodeURIComponent(sportKey)}`);
     const legacyUrlA = buildApiUrl(`/api/odds?sportKey=${encodeURIComponent(sportKey)}`);
     const legacyUrlB = buildApiUrl(`/api/odds?sport=${encodeURIComponent(sportKey)}`);
     let urlToUse = primaryUrl;
@@ -215,8 +215,8 @@ async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> 
 
   try {
     const dates = toYyyymmddUTC(isoDate);
-    const primaryUrl = buildApiUrl(`/api/espn+api?sport=${espnSportKey}&dates=${dates}`);
-    const fallbackUrl = buildApiUrl(`/api/espn+api/?sport=${espnSportKey}&dates=${dates}`);
+    const primaryUrl = buildApiUrl(`/api/espn-api?sport=${espnSportKey}&dates=${dates}`);
+    const fallbackUrl = buildApiUrl(`/api/espn-api/?sport=${espnSportKey}&dates=${dates}`);
     const legacyUrl = buildApiUrl(`/api/espn?sport=${espnSportKey}&dates=${dates}`);
     let urlToUse = primaryUrl;
     if (DEV) console.log(`[${sport}] ESPN: Fetching ${urlToUse}`);
@@ -384,7 +384,7 @@ async function fetchRecentTeamGamesFromScoreboards(
 
     try {
       const dates = toYyyymmddUTC(iso);
-      const res = await fetch(buildApiUrl(`/api/espn+api?sport=${espnSportKey}&dates=${dates}`), {
+      const res = await fetch(buildApiUrl(`/api/espn-api?sport=${espnSportKey}&dates=${dates}`), {
         headers: { accept: 'application/json' },
         cache: 'no-store',
       });
