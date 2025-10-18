@@ -30,12 +30,20 @@ export async function GET(req: Request) {
     const requestedSport = url.searchParams.get('sport') || 'nba';
     const dates = url.searchParams.get('dates');
     
+    console.log(`\n[ESPN Route] ===== Request Start =====`);
+    console.log(`[ESPN Route] Requested sport: ${requestedSport}`);
+    console.log(`[ESPN Route] Dates: ${dates || 'none'}`);
+    console.log(`[ESPN Route] Request URL: ${req.url}`);
+    
     const sportPath = ESPN_SPORT_PATHS[requestedSport.toLowerCase()];
     
     if (!sportPath) {
-      console.log(`[ESPN] Unknown sport: ${requestedSport}`);
+      console.log(`[ESPN Route] Unknown sport: ${requestedSport}`);
       return okJSON({ ok: true, games: [] });
     }
+    
+    console.log(`[ESPN Route] Sport path: ${sportPath}`);
+
 
     const cacheKey = `espn:${requestedSport}:${dates || 'today'}`;
     const now = Date.now();

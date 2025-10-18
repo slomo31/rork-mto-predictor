@@ -38,12 +38,20 @@ export async function GET(req: Request) {
     const KEY = process.env.ODDSAPI_KEY || process.env.EXPO_PUBLIC_ODDSAPI_KEY;
     const enabled = process.env.ENABLE_ODDSAPI || process.env.EXPO_PUBLIC_ENABLE_ODDSAPI;
     
-    console.log(`[OddsAPI] Sport: ${sportKey}`);
-    console.log(`[OddsAPI] Key: ${KEY ? 'present' : 'MISSING'}`);
-    console.log(`[OddsAPI] Enabled: ${enabled}`);
+    console.log(`\n[OddsAPI Route] ===== Request Start =====`);
+    console.log(`[OddsAPI Route] Sport: ${sportKey}`);
+    console.log(`[OddsAPI Route] Key: ${KEY ? KEY.substring(0, 8) + '...' : 'MISSING'}`);
+    console.log(`[OddsAPI Route] Enabled: ${enabled}`);
+    console.log(`[OddsAPI Route] Request URL: ${req.url}`);
     
-    if (!KEY || enabled !== 'true') {
-      console.log(`[OddsAPI] Disabled or no key, returning empty games`);
+    if (!KEY) {
+      console.error(`[OddsAPI Route] ERROR: No API key found in environment`);
+      console.error(`[OddsAPI Route] Checked: ODDSAPI_KEY, EXPO_PUBLIC_ODDSAPI_KEY`);
+      return okJSON({ ok: false, error: 'No API key configured', games: [] });
+    }
+    
+    if (enabled !== 'true') {
+      console.log(`[OddsAPI Route] Disabled (enabled=${enabled}), returning empty games`);
       return okJSON({ ok: true, games: [] });
     }
 

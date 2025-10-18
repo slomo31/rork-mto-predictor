@@ -78,7 +78,21 @@ async function fetchFromOddsAPI(sport: Sport): Promise<RawGame[]> {
       return [];
     }
 
-    const json = await res.json();
+    const responseText = await res.text();
+    
+    if (responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html')) {
+      console.error(`[${sport}] OddsAPI: Received HTML error page`);
+      return [];
+    }
+
+    let json;
+    try {
+      json = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error(`[${sport}] OddsAPI: JSON parse error:`, parseError);
+      console.error(`[${sport}] OddsAPI: Response:`, responseText.substring(0, 300));
+      return [];
+    }
     
     if (json?.error) {
       console.error(`[${sport}] OddsAPI: API returned error:`, json.error);
@@ -117,7 +131,21 @@ async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> 
       return [];
     }
 
-    const json = await res.json();
+    const responseText = await res.text();
+    
+    if (responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html')) {
+      console.error(`[${sport}] ESPN: Received HTML error page`);
+      return [];
+    }
+
+    let json;
+    try {
+      json = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error(`[${sport}] ESPN: JSON parse error:`, parseError);
+      console.error(`[${sport}] ESPN: Response:`, responseText.substring(0, 300));
+      return [];
+    }
     
     const games = Array.isArray(json?.games) ? json.games : [];
     if (DEV) console.log(`[${sport}] ESPN: ${games.length} games`);
