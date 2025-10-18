@@ -1,5 +1,7 @@
 import http from "http";
 import fetch from "node-fetch";
+import 'dotenv/config';
+import http from 'http';
 
 const PORT = process.env.API_PORT || 3000;
 const HOST = process.env.API_HOST || "0.0.0.0";
