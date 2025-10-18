@@ -3,6 +3,12 @@ export const dynamic = 'force-dynamic';
 
 type Cached = { ts: number; data: any };
 
+type Meta = {
+  upstreamUrl?: string;
+  upstreamStatus?: number;
+  durationMs?: number;
+};
+
 const TTL_MS = 2 * 60 * 1000;
 const cache = new Map<string, Cached>();
 
@@ -18,8 +24,8 @@ const SPORT_KEY_MAPPING: Record<string, string> = {
   soccer: 'soccer_usa_mls',
 };
 
-function okJSON(data: any, status = 200) {
-  return new Response(JSON.stringify(data), {
+function okJSON(data: any, status = 200, meta?: Meta) {
+  return new Response(JSON.stringify({ ...data, meta }), {
     status,
     headers: {
       'content-type': 'application/json',
@@ -76,11 +82,13 @@ export async function GET(req: Request) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
 
-    try {
-      const fetchUrl = `${API_BASE}/${encodeURIComponent(sportKey)}/odds?apiKey=${encodeURIComponent(
+    const fetchUrl = `${API_BASE}/${encodeURIComponent(sportKey)}/odds?apiKey=${encodeURIComponent(
         KEY
       )}&markets=totals&oddsFormat=american&regions=us`;
 
+    const started = Date.now();
+
+    try {
       const response = await fetch(fetchUrl, {
         signal: controller.signal,
         headers: {
@@ -92,35 +100,40 @@ export async function GET(req: Request) {
       clearTimeout(timeout);
 
       const responseText = await response.text();
+      const meta: Meta = {
+        upstreamUrl: fetchUrl,
+        upstreamStatus: response.status,
+        durationMs: Date.now() - started,
+      };
 
       if (!responseText || responseText.trim().length === 0) {
-        return okJSON({ ok: false, error: 'Empty response', games: [] });
+        return okJSON({ ok: false, error: 'Empty response', games: [] }, 200, meta);
       }
       const trimmed = responseText.trim();
       if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html')) {
-        return okJSON({ ok: false, error: 'HTML error page - check API key / endpoint', games: [] });
+        return okJSON({ ok: false, error: 'HTML error page - check API key / endpoint', games: [] }, 200, meta);
       }
 
       let rawData: any;
       try {
         rawData = JSON.parse(responseText);
       } catch {
-        return okJSON({ ok: false, error: 'Invalid JSON', games: [] });
+        return okJSON({ ok: false, error: 'Invalid JSON', games: [] }, 200, meta);
       }
 
       if (!response.ok) {
         if (response.status === 401)
-          return okJSON({ ok: false, error: 'Invalid API key', games: [] });
+          return okJSON({ ok: false, error: 'Invalid API key', games: [] }, 200, meta);
         if (response.status === 429)
-          return okJSON({ ok: false, error: 'Rate limit exceeded', games: [] });
+          return okJSON({ ok: false, error: 'Rate limit exceeded', games: [] }, 200, meta);
         if (response.status === 400)
-          return okJSON({ ok: false, error: `Invalid sport key: ${sportKey}`, games: [] });
-        return okJSON({ ok: false, error: `HTTP ${response.status}`, games: [] }, response.status);
+          return okJSON({ ok: false, error: `Invalid sport key: ${sportKey}`, games: [] }, 200, meta);
+        return okJSON({ ok: false, error: `HTTP ${response.status}`, games: [] }, response.status, meta);
       }
 
       if (rawData && typeof rawData === 'object' && !Array.isArray(rawData)) {
         if ((rawData as any).message)
-          return okJSON({ ok: false, error: (rawData as any).message, games: [] });
+          return okJSON({ ok: false, error: (rawData as any).message, games: [] }, 200, meta);
       }
 
       const games = (Array.isArray(rawData) ? rawData : [])
@@ -152,13 +165,14 @@ export async function GET(req: Request) {
         .filter((g: any) => g.home && g.away && typeof g.commenceTimeUTC === 'string');
 
       cache.set(cacheKey, { ts: now, data: games });
-      return okJSON({ ok: true, games });
+      return okJSON({ ok: true, games }, 200, meta);
     } catch (fetchError: any) {
       clearTimeout(timeout);
+      const meta: Meta = { upstreamUrl: fetchUrl, durationMs: Date.now() - started };
       if (fetchError?.name === 'AbortError') {
-        return okJSON({ ok: false, error: 'Request timeout', games: [] });
+        return okJSON({ ok: false, error: 'Request timeout', games: [] }, 200, meta);
       }
-      return okJSON({ ok: false, error: fetchError?.message || 'Fetch failed', games: [] });
+      return okJSON({ ok: false, error: fetchError?.message || 'Fetch failed', games: [] }, 200, meta);
     }
   } catch (err: any) {
     return okJSON({ ok: false, error: err?.message || 'Unknown error', games: [] });
