@@ -4,56 +4,51 @@ import Constants from 'expo-constants';
 let cachedBase: string | null = null;
 
 function normalizeBase(u: string): string {
-  const trimmed = u.trim();
+  const trimmed = (u || '').trim();
   if (!trimmed) return '';
   return trimmed.replace(/\/$/, '');
 }
 
 export function getApiBaseUrl(): string {
-  if (cachedBase) return cachedBase as string;
+  if (cachedBase) return cachedBase;
 
+  // 1) Prefer explicit env
   const explicit = normalizeBase(
-    (process.env.EXPO_PUBLIC_API_URL || process.env.EXPO_PUBLIC_API_BASE || '') as string,
+    (process.env.EXPO_PUBLIC_API_BASE ||
+      process.env.EXPO_PUBLIC_API_URL ||
+      '') as string
   );
   if (explicit) {
     cachedBase = explicit;
-    return cachedBase as string;
+    if (__DEV__) console.log(`[API] Using EXPO_PUBLIC_API_BASE: ${cachedBase}`);
+    return cachedBase;
   }
 
+  // 2) Fallback: best-effort derive (rarely used now)
   if (Platform.OS !== 'web') {
     const possibleHost =
       (Constants as any)?.expoConfig?.hostUri ||
       (Constants as any)?.manifest?.debuggerHost ||
       (Constants as any)?.manifest2?.extra?.expoClient?.hostUri ||
       '';
-
     if (possibleHost) {
       const hostPort = String(possibleHost).split('?')[0];
       const hasProtocol = /^https?:\/\//i.test(hostPort);
-      const base = hasProtocol ? hostPort : `http://${hostPort}`;
-      cachedBase = normalizeBase(base);
+      cachedBase = normalizeBase(hasProtocol ? hostPort : `http://${hostPort}`);
       if (__DEV__) console.log(`[API] Derived base from Constants: ${cachedBase}`);
-      return cachedBase as string;
+      return cachedBase;
     }
   }
 
   if (__DEV__) {
-    console.warn('[API] No EXPO_PUBLIC_API_BASE set. Set it to your API origin, e.g. http://localhost:3000 or http://192.168.1.X:3000');
+    console.warn('[API] No EXPO_PUBLIC_API_BASE set. Example: http://10.0.0.47:3001');
   }
-  return '';
+  cachedBase = '';
+  return cachedBase;
 }
 
 export function buildApiUrl(path: string): string {
   const base = getApiBaseUrl();
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
-
-  if (!base) return cleanPath;
-
-  if (cleanPath.startsWith('/api/')) {
-    if (/:(8081|5173)$/.test(base)) {
-      return base.replace(/:(8081|5173)$/,':3000') + cleanPath;
-    }
-  }
-
-  return `${base}${cleanPath}`;
+  return base ? `${base}${cleanPath}` : cleanPath;
 }
