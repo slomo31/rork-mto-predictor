@@ -14,6 +14,28 @@ export function addDaysISO(iso: string, days: number): string {
   return toISODateLocal(dt);
 }
 
+export function buildUtcWindowForLocalDate(localDate: Date, tz: string = 'America/Chicago', padHours: number = 3) {
+  const year = localDate.getFullYear();
+  const month = localDate.getMonth();
+  const day = localDate.getDate();
+  
+  const startLocal = new Date(year, month, day, 0, 0, 0);
+  const endLocal = new Date(year, month, day, 23, 59, 59);
+
+  const startUTC = new Date(startLocal.getTime());
+  const endUTC = new Date(endLocal.getTime());
+
+  startUTC.setHours(startUTC.getHours() - padHours);
+  endUTC.setHours(endUTC.getHours() + padHours);
+
+  return { startUTC, endUTC };
+}
+
+export function withinUTC(dtISO: string, startUTC: Date, endUTC: Date): boolean {
+  const t = new Date(dtISO).getTime();
+  return t >= startUTC.getTime() && t <= endUTC.getTime();
+}
+
 export function localDayRange(isoDate: string) {
   const [y, m, d] = isoDate.split('-').map(Number);
   const start = new Date(y!, (m! - 1), d!, 0, 0, 0, 0).getTime();

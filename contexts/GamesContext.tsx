@@ -1,6 +1,7 @@
 import createContextHook from '@nkzw/create-context-hook';
 import { useQuery } from '@tanstack/react-query';
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
+import { AppState } from 'react-native';
 import { Sport, Game, MTOPrediction } from '@/types/sports';
 import { fetchUpcomingGames, fetchGameCalculationInput } from '@/utils/realDataService';
 import { calculateMTO } from '@/utils/mtoEngine';
@@ -12,19 +13,41 @@ export const [GamesProvider, useGames] = createContextHook(() => {
   const [selectedSports, setSelectedSports] = useState<Sport[]>(ALL_SPORTS);
   const [dateFilter, setDateFilter] = useState<string>('all');
   const [selectedDate, setSelectedDate] = useState<string>(toISODateLocal());
+  const [lastUpdated, setLastUpdated] = useState<number>(Date.now());
 
   const gamesQuery = useQuery({
     queryKey: ['games', selectedSports, selectedDate],
     queryFn: async () => {
+      console.log(`[GamesContext] Fetching games for ${selectedSports.length} sports on ${selectedDate}`);
       const allGames: Game[] = [];
       for (const sport of selectedSports) {
         const games = await fetchUpcomingGames(sport, selectedDate);
+        console.log(`[GamesContext] ${sport}: ${games.length} games`);
         allGames.push(...games);
       }
+      setLastUpdated(Date.now());
       return allGames.sort((a, b) => new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime());
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        const now = Date.now();
+        if (now - lastUpdated > 2 * 60 * 1000) {
+          console.log('[GamesContext] App resumed, refetching games');
+          gamesQuery.refetch();
+        }
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [lastUpdated, gamesQuery.refetch]);
 
   const toggleSport = useCallback((sport: Sport) => {
     setSelectedSports(prev => {
