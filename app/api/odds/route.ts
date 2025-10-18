@@ -53,14 +53,23 @@ export async function GET(req: Request) {
     const dateFormat = searchParams.get('dateFormat') || 'iso';
 
     if (!sport) return okJSON({ error: 'Missing sport param' }, 400);
-    const key = process.env.ODDSAPI_KEY;
-    const enabled = process.env.ENABLE_ODDSAPI;
     
-    console.log(`[OddsAPI Route] Request for sport=${sport}, key=${key ? 'present' : 'missing'}, enabled=${enabled}`);
+    const key = process.env.ODDSAPI_KEY || process.env.EXPO_PUBLIC_ODDSAPI_KEY;
+    const enabled = process.env.ENABLE_ODDSAPI || process.env.EXPO_PUBLIC_ENABLE_ODDSAPI;
     
-    if (!key || enabled !== 'true') {
-      console.log(`[OddsAPI Route] Not enabled or missing key, returning empty`);
-      return okJSON({ source: 'none', games: [] });
+    console.log(`[OddsAPI Route] Request for sport=${sport}`);
+    console.log(`[OddsAPI Route] Key: ${key ? 'present' : 'missing'}`);
+    console.log(`[OddsAPI Route] Enabled: ${enabled}`);
+    console.log(`[OddsAPI Route] All env vars:`, Object.keys(process.env).filter(k => k.includes('ODDS') || k.includes('ENABLE')));
+    
+    if (!key) {
+      console.log(`[OddsAPI Route] Missing API key, returning empty`);
+      return okJSON({ source: 'none', games: [], error: 'API key not configured' });
+    }
+    
+    if (enabled !== 'true') {
+      console.log(`[OddsAPI Route] OddsAPI not enabled (${enabled}), returning empty`);
+      return okJSON({ source: 'none', games: [], error: 'OddsAPI not enabled' });
     }
 
     const ck = `odds:${sport}:${regions}:${markets}:${dateFormat}`;

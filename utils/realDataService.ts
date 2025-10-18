@@ -54,22 +54,6 @@ const ODDSAPI_SPORT_KEYS: Partial<Record<Sport, string>> = {
   SOCCER: 'soccer_usa_mls',
 };
 
-function getUTCWindow(isoDate: string): { start: number; end: number } {
-  const [y, m, d] = isoDate.split('-').map(Number);
-  const localStart = new Date(y!, m! - 1, d!, 0, 0, 0);
-  const localEnd = new Date(y!, m! - 1, d!, 23, 59, 59, 999);
-  
-  const start = localStart.getTime() - (12 * 60 * 60 * 1000);
-  const end = localEnd.getTime() + (12 * 60 * 60 * 1000);
-  
-  if (DEV) console.log(`[Date Window] ${isoDate}: ${new Date(start).toISOString()} to ${new Date(end).toISOString()}`);
-  return { start, end };
-}
-
-function withinWindow(utcMs: number, start: number, end: number): boolean {
-  return utcMs >= start && utcMs <= end;
-}
-
 async function fetchFromOddsAPI(sport: Sport, isoDate: string): Promise<RawGame[]> {
   const sportKey = ODDSAPI_SPORT_KEYS[sport];
   if (!sportKey) {
@@ -97,18 +81,8 @@ async function fetchFromOddsAPI(sport: Sport, isoDate: string): Promise<RawGame[
     const games = Array.isArray(json?.games) ? json.games : [];
     if (DEV) console.log(`[${sport}] OddsAPI returned ${games.length} total games`);
     
-    const { start, end } = getUTCWindow(isoDate);
-    const filtered = games.filter((g: RawGame) => {
-      const t = new Date(g.commenceTimeUTC).getTime();
-      const matches = withinWindow(t, start, end);
-      if (DEV && !matches && games.length < 20) {
-        console.log(`  Filtered out: ${g.away} @ ${g.home} at ${g.commenceTimeUTC}`);
-      }
-      return matches;
-    });
-
-    if (DEV) console.log(`[${sport}] OddsAPI: ${filtered.length} games match date ${isoDate}`);
-    return filtered;
+    console.log(`[${sport}] OddsAPI: Skipping date filter, returning all ${games.length} games`);
+    return games;
   } catch (e) {
     if (DEV) console.error(`[${sport}] OddsAPI error:`, e);
     return [];
@@ -144,18 +118,8 @@ async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> 
     const games = Array.isArray(json?.games) ? json.games : [];
     if (DEV) console.log(`[${sport}] ESPN returned ${games.length} total games`);
 
-    const { start, end } = getUTCWindow(isoDate);
-    const filtered = games.filter((g: RawGame) => {
-      const t = new Date(g.commenceTimeUTC).getTime();
-      const matches = withinWindow(t, start, end);
-      if (DEV && !matches && games.length < 20) {
-        console.log(`  Filtered out: ${g.away} @ ${g.home} at ${g.commenceTimeUTC}`);
-      }
-      return matches;
-    });
-
-    if (DEV) console.log(`[${sport}] ESPN: ${filtered.length} games match date ${isoDate}`);
-    return filtered;
+    console.log(`[${sport}] ESPN: Skipping date filter, returning all ${games.length} games`);
+    return games;
   } catch (e) {
     if (DEV) console.error(`[${sport}] ESPN error:`, e);
     return [];
