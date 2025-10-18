@@ -1,15 +1,17 @@
+// app/api/espn+api.ts
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const TTL_MS = 2 * 60 * 1000;
-const cache = new Map<string, { ts: number; data: any }>();
+type Cached = { ts: number; data: any };
+const cache = new Map<string, Cached>();
 
 function okJSON(data: any, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       'content-type': 'application/json',
-      'cache-control': 'public, s-maxage=120, stale-while-revalidate=120'
+      'cache-control': 'public, s-maxage=120, stale-while-revalidate=120',
     },
   });
 }
@@ -27,12 +29,13 @@ const ESPN_SPORT_PATHS: Record<string, string> = {
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
-    const requestedSport = url.searchParams.get('sport') || 'nba';
-    const dates = url.searchParams.get('dates');
+    const requestedSport = String(url.searchParams.get('sport') || 'nba').toLowerCase();
+    const dates = url.searchParams.get('dates') || ''; // e.g. 20251018 (YYYYMMDD)
 
-    const sportPath = ESPN_SPORT_PATHS[requestedSport.toLowerCase()];
-    if (!sportPath) return okJSON({ ok: true, games: [] });
+    const sportPath = ESPN_SPORT_PATHS[requestedSport];
+    if (!sportPath) return okJSON({ ok: true, games: [] }); // unknown sport -> empty but OK
 
+    // cache key
     const cacheKey = `espn:${requestedSport}:${dates || 'today'}`;
     const now = Date.now();
     const cached = cache.get(cacheKey);
@@ -41,11 +44,12 @@ export async function GET(req: Request) {
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
+    const timeout = setTimeout(() => controller.abort(), 12_000);
 
     try {
-      const queryString = dates ? `?dates=${dates}` : '';
-      const fetchUrl = `https://site.api.espn.com/apis/site/v2/sports/${sportPath}/scoreboard${queryString}`;
+      // ESPN web API endpoint (no key required)
+      const query = dates ? `?dates=${encodeURIComponent(dates)}` : '';
+      const fetchUrl = `https://site.web.api.espn.com/apis/v2/sports/${sportPath}/scoreboard${query}`;
 
       const response = await fetch(fetchUrl, {
         signal: controller.signal,
@@ -56,18 +60,20 @@ export async function GET(req: Request) {
       });
       clearTimeout(timeout);
 
-      const responseText = await response.text();
-      if (!responseText || responseText.trim().length === 0) {
+      const txt = await response.text();
+
+      // Guard against HTML/app-shell responses so we don't crash on JSON.parse
+      if (!txt || txt.trim().length === 0) {
         return okJSON({ ok: false, error: 'Empty response from ESPN', games: [] });
       }
-      if (responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html')) {
+      if (txt.trim().startsWith('<!DOCTYPE') || txt.trim().startsWith('<html')) {
         return okJSON({ ok: false, error: 'ESPN returned HTML error page', games: [] });
       }
 
-      let rawData: any;
+      let raw: any;
       try {
-        rawData = JSON.parse(responseText);
-      } catch (parseError) {
+        raw = JSON.parse(txt);
+      } catch {
         return okJSON({ ok: false, error: 'Invalid JSON response from ESPN', games: [] });
       }
 
@@ -75,46 +81,47 @@ export async function GET(req: Request) {
         return okJSON({ ok: false, error: `HTTP ${response.status}`, games: [] });
       }
 
-      const events = rawData?.events || [];
+      const events: any[] = Array.isArray(raw?.events) ? raw.events : [];
       const games = events
-        .map((event: any) => {
-          const competition = event?.competitions?.[0];
-          const homeTeam = competition?.competitors?.find((c: any) => c.homeAway === 'home');
-          const awayTeam = competition?.competitors?.find((c: any) => c.homeAway === 'away');
+        .map((event) => {
+          const comp = event?.competitions?.[0];
+          const home = comp?.competitors?.find((c: any) => c?.homeAway === 'home');
+          const away = comp?.competitors?.find((c: any) => c?.homeAway === 'away');
+
           return {
             id: event?.id,
-            home: homeTeam?.team?.displayName,
-            away: awayTeam?.team?.displayName,
-            homeId: homeTeam?.team?.id,
-            awayId: awayTeam?.team?.id,
-            homeLogo: homeTeam?.team?.logo,
-            awayLogo: awayTeam?.team?.logo,
-            venue: competition?.venue?.fullName,
-            commenceTimeUTC: event?.date,
-            total: competition?.odds?.[0]?.overUnder,
+            home: home?.team?.displayName,
+            away: away?.team?.displayName,
+            homeId: home?.team?.id,
+            awayId: away?.team?.id,
+            homeLogo: home?.team?.logo,
+            awayLogo: away?.team?.logo,
+            venue: comp?.venue?.fullName,
+            commenceTimeUTC: event?.date, // ISO timestamp
+            total: comp?.odds?.[0]?.overUnder, // sometimes undefined
             status:
               event?.status?.type?.name === 'STATUS_FINAL'
                 ? 'post'
                 : event?.status?.type?.state === 'in'
                 ? 'in'
                 : 'pre',
-            homeScore: homeTeam?.score,
-            awayScore: awayTeam?.score,
+            homeScore: home?.score,
+            awayScore: away?.score,
             source: 'espn' as const,
           };
         })
-        .filter((g: any) => g.home && g.away && g.commenceTimeUTC);
+        .filter((g) => g.home && g.away && g.commenceTimeUTC);
 
       cache.set(cacheKey, { ts: now, data: games });
       return okJSON({ ok: true, games });
     } catch (fetchError: any) {
       clearTimeout(timeout);
-      if (fetchError.name === 'AbortError') {
+      if (fetchError?.name === 'AbortError') {
         return okJSON({ ok: false, error: 'Request timeout after 12 seconds', games: [] });
       }
-      throw fetchError;
+      return okJSON({ ok: false, error: fetchError?.message || 'Fetch failed', games: [] });
     }
   } catch (err: any) {
-    return okJSON({ ok: false, error: err.message || 'Unknown error occurred', games: [] });
+    return okJSON({ ok: false, error: err?.message || 'Unknown error occurred', games: [] });
   }
 }
