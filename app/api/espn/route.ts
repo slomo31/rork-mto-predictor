@@ -1,9 +1,14 @@
 const TTL_MS = 2 * 60 * 1000;
 const cache = new Map<string, { ts: number; data: any }>();
 
-const BASES = [
-  'https://site.api.espn.com/apis/site/v2/sports',
-];
+const SPORT_MAPPING: Record<string, string> = {
+  'nba': 'basketball/nba',
+  'nfl': 'football/nfl', 
+  'nhl': 'hockey/nhl',
+  'mlb': 'baseball/mlb',
+  'ncaa_bb': 'basketball/mens-college-basketball',
+  'ncaa_fb': 'football/college-football',
+};
 
 function okJSON(data: any, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -15,87 +20,99 @@ function okJSON(data: any, status = 200) {
   });
 }
 
-async function fetchJSON(url: string, timeoutMs = 7500) {
-  const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      headers: { 'Accept': 'application/json', 'User-Agent': 'MTO/1.0' },
-      signal: ctrl.signal,
-      cache: 'no-store',
-    });
-    const ct = res.headers.get('content-type') || '';
-    if (!ct.includes('application/json')) {
-      throw new Error(`Non-JSON from ESPN: ${res.status}`);
-    }
-    const json = await res.json();
-    return { ok: res.ok, status: res.status, json };
-  } finally {
-    clearTimeout(to);
-  }
-}
-
-function normalizeEvents(data: any) {
-  const events = data?.events ?? [];
-  const games = events.map((ev: any) => {
-    const comp = ev?.competitions?.[0];
-    const home = comp?.competitors?.find((c: any) => c.homeAway === 'home');
-    const away = comp?.competitors?.find((c: any) => c.homeAway === 'away');
-    return {
-      id: ev?.id,
-      home: home?.team?.displayName,
-      away: away?.team?.displayName,
-      homeId: home?.team?.id,
-      awayId: away?.team?.id,
-      homeLogo: home?.team?.logo,
-      awayLogo: away?.team?.logo,
-      venue: comp?.venue?.fullName,
-      commenceTimeUTC: ev?.date,
-      total: comp?.odds?.[0]?.overUnder,
-      source: 'espn' as const,
-    };
-  }).filter((g: any) => g.home && g.away && g.commenceTimeUTC);
-  return games;
-}
-
 export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const path = url.searchParams.get('path') || '/basketball/nba/scoreboard';
-  const dates = url.searchParams.get('dates');
-  const qs = dates ? `?dates=${dates}` : '';
-  
-  const cacheKey = `${path}${qs}`;
-  const now = Date.now();
-  const cached = cache.get(cacheKey);
-  if (cached && now - cached.ts < TTL_MS) {
-    console.log(`[ESPN Route] Cache hit: ${cacheKey}`);
-    return okJSON({ ok: true, games: cached.data });
-  }
-
-  let lastErr: any = null;
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    for (const base of BASES) {
-      try {
-        const full = `${base}${path}${qs}`;
-        console.log(`[ESPN Route] Fetching: ${full}`);
-        const { ok, status, json } = await fetchJSON(full);
-        if (!ok) {
-          lastErr = `HTTP ${status}`;
-          throw new Error(`ESPN status ${status}`);
-        }
-        const games = normalizeEvents(json);
-        console.log(`[ESPN Route] ✓ ${games.length} games`);
-        cache.set(cacheKey, { ts: now, data: games });
-        return okJSON({ ok: true, games });
-      } catch (err) {
-        lastErr = err;
-        console.warn(`[ESPN Route] Attempt ${attempt + 1} failed for ${base}:`, err);
-      }
+  try {
+    const url = new URL(req.url);
+    const requestedSport = url.searchParams.get('sport') || 'nba';
+    const dates = url.searchParams.get('dates');
+    
+    const sportPath = SPORT_MAPPING[requestedSport.toLowerCase()];
+    if (!sportPath) {
+      return okJSON({ ok: true, games: [] });
     }
-    await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+
+    const cacheKey = `espn:${requestedSport}:${dates || 'today'}`;
+    const now = Date.now();
+    const cached = cache.get(cacheKey);
+    if (cached && now - cached.ts < TTL_MS) {
+      console.log(`[ESPN Route] Cache hit: ${cacheKey}`);
+      return okJSON({ ok: true, games: cached.data });
+    }
+
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 10000);
+
+    const qs = dates ? `?dates=${dates}` : '';
+    const fetchUrl = `https://site.api.espn.com/apis/site/v2/sports/${sportPath}/scoreboard${qs}`;
+    console.log(`[ESPN Route] Fetching: ${fetchUrl}`);
+
+    const resp = await fetch(fetchUrl, {
+      signal: ctrl.signal,
+      headers: {
+        'User-Agent': 'SportsApp/1.0',
+        'Accept': 'application/json'
+      }
+    });
+    clearTimeout(to);
+    
+    const text = await resp.text();
+    
+    if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
+      console.error(`[ESPN Route] Received HTML error page for ${requestedSport}`);
+      console.error(`[ESPN Route] First 200 chars:`, text.substring(0, 200));
+      return okJSON({ 
+        ok: false, 
+        error: `ESPN returned HTML error page`,
+        games: [] 
+      });
+    }
+    
+    let raw;
+    try {
+      raw = JSON.parse(text);
+    } catch (parseError) {
+      console.error(`[ESPN Route] JSON parse error:`, parseError);
+      console.error(`[ESPN Route] Response text:`, text.substring(0, 500));
+      return okJSON({ 
+        ok: false, 
+        error: `Invalid JSON from ESPN`,
+        games: [] 
+      });
+    }
+
+    const games = (raw?.events || []).map((event: any) => {
+      const competition = event?.competitions?.[0];
+      const homeTeam = competition?.competitors?.find((c: any) => c.homeAway === 'home');
+      const awayTeam = competition?.competitors?.find((c: any) => c.homeAway === 'away');
+      
+      return {
+        id: event?.id,
+        home: homeTeam?.team?.displayName,
+        away: awayTeam?.team?.displayName,
+        homeId: homeTeam?.team?.id,
+        awayId: awayTeam?.team?.id,
+        homeLogo: homeTeam?.team?.logo,
+        awayLogo: awayTeam?.team?.logo,
+        venue: competition?.venue?.fullName,
+        commenceTimeUTC: event?.date,
+        total: competition?.odds?.[0]?.overUnder,
+        source: 'espn' as const,
+      };
+    }).filter((g: any) => g.home && g.away && g.commenceTimeUTC);
+
+    console.log(`[ESPN Route] ✓ ${games.length} games for ${requestedSport}`);
+    if (games.length > 0) {
+      console.log(`[ESPN Route] Sample: ${games[0]?.away} @ ${games[0]?.home}`);
+    }
+    
+    cache.set(cacheKey, { ts: now, data: games });
+    return okJSON({ ok: true, games });
+  } catch (err: any) {
+    console.error(`[ESPN Route] ERROR:`, err.message);
+    return okJSON({ 
+      ok: false, 
+      error: err.message,
+      games: [] 
+    });
   }
-  
-  console.error(`[ESPN Route] All attempts failed`);
-  return okJSON({ ok: false, error: String(lastErr), games: [] }, 200);
 }

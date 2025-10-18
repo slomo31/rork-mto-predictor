@@ -27,26 +27,33 @@ function std(nums: number[]) {
   return Math.sqrt(v);
 }
 
+const SPORT_KEY_MAPPING: Record<string, string> = {
+  'nfl': 'americanfootball_nfl',
+  'nba': 'basketball_nba', 
+  'nhl': 'icehockey_nhl',
+  'mlb': 'baseball_mlb',
+  'ncaa_fb': 'americanfootball_ncaaf',
+  'ncaa_bb': 'basketball_ncaab',
+  'soccer': 'soccer_epl',
+};
+
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
-    const sportKey = url.searchParams.get('sportKey') || url.searchParams.get('sport') || 'basketball_nba';
+    const requestedSport = url.searchParams.get('sportKey') || url.searchParams.get('sport') || 'nba';
+    
+    const sportKey = SPORT_KEY_MAPPING[requestedSport.toLowerCase()] || 'basketball_nba';
     
     const KEY = process.env.ODDSAPI_KEY || process.env.EXPO_PUBLIC_ODDSAPI_KEY;
     const enabled = process.env.ENABLE_ODDSAPI || process.env.EXPO_PUBLIC_ENABLE_ODDSAPI;
     
-    console.log(`[OddsAPI Route] Sport: ${sportKey}`);
+    console.log(`[OddsAPI Route] Requested: ${requestedSport}, Mapped: ${sportKey}`);
     console.log(`[OddsAPI Route] Key: ${KEY ? 'present' : 'MISSING'}`);
     console.log(`[OddsAPI Route] Enabled: ${enabled}`);
     
-    if (!KEY) {
-      console.error(`[OddsAPI Route] ERROR: API key not configured`);
-      return okJSON({ ok: false, error: 'API key not configured', games: [] }, 200);
-    }
-    
-    if (enabled !== 'true') {
-      console.error(`[OddsAPI Route] ERROR: OddsAPI not enabled`);
-      return okJSON({ ok: false, error: 'OddsAPI not enabled', games: [] }, 200);
+    if (!KEY || enabled !== 'true') {
+      console.log(`[OddsAPI Route] OddsAPI disabled or no key, returning empty games`);
+      return okJSON({ ok: true, games: [] });
     }
 
     const cacheKey = `odds:${sportKey}`;
@@ -58,31 +65,68 @@ export async function GET(req: Request) {
     }
 
     const ctrl = new AbortController();
-    const to = setTimeout(() => ctrl.abort(), 7500);
+    const to = setTimeout(() => ctrl.abort(), 10000);
 
-    const fetchUrl = `${API}/${sportKey}/odds?apiKey=${KEY}&markets=totals&oddsFormat=american&bookmakers=all`;
+    const fetchUrl = `${API}/${sportKey}/odds?apiKey=${KEY}&markets=totals&oddsFormat=american&bookmakers=betmgm,fanduel,draftkings,pointsbet&regions=us`;
+    
     console.log(`[OddsAPI Route] Fetching: ${fetchUrl.replace(KEY, 'REDACTED')}`);
 
     const resp = await fetch(fetchUrl, {
       signal: ctrl.signal,
-      cache: 'no-store',
-      headers: { 'Accept': 'application/json' }
+      headers: { 
+        'Accept': 'application/json',
+        'User-Agent': 'SportsApp/1.0'
+      }
     });
     clearTimeout(to);
     
-    const ct = resp.headers.get('content-type') || '';
-    if (!ct.includes('application/json')) {
-      throw new Error(`Non-JSON from OddsAPI: ${resp.status}`);
+    const text = await resp.text();
+    
+    if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
+      console.error(`[OddsAPI Route] Received HTML error page for ${sportKey}`);
+      console.error(`[OddsAPI Route] First 200 chars:`, text.substring(0, 200));
+      
+      return okJSON({ 
+        ok: false, 
+        error: `OddsAPI returned HTML error page for ${sportKey}`,
+        games: [] 
+      });
     }
     
-    const raw = await resp.json();
-
+    let raw;
+    try {
+      raw = JSON.parse(text);
+    } catch (parseError) {
+      console.error(`[OddsAPI Route] JSON parse error:`, parseError);
+      console.error(`[OddsAPI Route] Response text:`, text.substring(0, 500));
+      return okJSON({ 
+        ok: false, 
+        error: `Invalid JSON response from OddsAPI`,
+        games: [] 
+      });
+    }
+    
     if (!resp.ok) {
-      console.error(`[OddsAPI Route] API error:`, raw);
-      return okJSON({ ok: false, error: `HTTP ${resp.status}`, games: [] }, 200);
+      console.error(`[OddsAPI Route] API error ${resp.status}:`, raw);
+      return okJSON({ 
+        ok: false, 
+        error: `HTTP ${resp.status}: ${raw?.message || 'Unknown error'}`,
+        games: [] 
+      });
     }
 
-    const games = (raw || []).map((g: any) => {
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      if (raw.message) {
+        console.error(`[OddsAPI Route] API error message:`, raw.message);
+        return okJSON({ 
+          ok: false, 
+          error: raw.message,
+          games: [] 
+        });
+      }
+    }
+
+    const games = (Array.isArray(raw) ? raw : []).map((g: any) => {
       const totals: number[] = [];
       const commenceTimeUTC: string | undefined = g?.commence_time;
       
@@ -109,15 +153,19 @@ export async function GET(req: Request) {
       };
     }).filter((g: any) => g.home && g.away && g.commenceTimeUTC);
 
-    console.log(`[OddsAPI Route] ✓ ${games.length} games`);
+    console.log(`[OddsAPI Route] ✓ ${games.length} games for ${sportKey}`);
     if (games.length > 0) {
-      console.log(`[OddsAPI Route] First game: ${games[0]?.away} @ ${games[0]?.home}`);
+      console.log(`[OddsAPI Route] Sample: ${games[0]?.away} @ ${games[0]?.home}`);
     }
     
     cache.set(cacheKey, { ts: now, data: games });
     return okJSON({ ok: true, games });
   } catch (err: any) {
     console.error(`[OddsAPI Route] ERROR:`, err.message || err);
-    return okJSON({ ok: false, error: String(err), games: [] }, 200);
+    return okJSON({ 
+      ok: false, 
+      error: err.message || 'Unknown error',
+      games: [] 
+    });
   }
 }
