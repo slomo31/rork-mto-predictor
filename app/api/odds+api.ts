@@ -1,8 +1,11 @@
+// app/api/odds+api.ts
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+type Cached = { ts: number; data: any };
+
 const TTL_MS = 2 * 60 * 1000;
-const cache = new Map<string, { ts: number; data: any }>();
+const cache = new Map<string, Cached>();
 
 const API_BASE = 'https://api.the-odds-api.com/v4/sports';
 
@@ -21,6 +24,7 @@ function okJSON(data: any, status = 200) {
     status,
     headers: {
       'content-type': 'application/json',
+      // cache for CDN / browser, but keep it short while developing
       'cache-control': 'public, s-maxage=120, stale-while-revalidate=120',
     },
   });
@@ -43,36 +47,72 @@ function std(nums: number[]) {
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
-    const requested = url.searchParams.get('sport') || url.searchParams.get('sportKey') || 'basketball_nba';
-    const sportKey = SPORT_KEY_MAPPING[`${requested}`.toLowerCase()] || requested;
+    const requested =
+      url.searchParams.get('sport') ||
+      url.searchParams.get('sportKey') ||
+      'basketball_nba';
 
-    const KEY = process.env.ODDSAPI_KEY || process.env.EXPO_PUBLIC_ODDSAPI_KEY;
-    const enabled = process.env.ENABLE_ODDSAPI || process.env.EXPO_PUBLIC_ENABLE_ODDSAPI;
+    const sportKey =
+      SPORT_KEY_MAPPING[String(requested).toLowerCase()] || String(requested);
 
-    if (!KEY) return okJSON({ ok: false, error: 'No API key configured', games: [] });
-    if (enabled !== 'true') return okJSON({ ok: true, games: [] });
+    // Expo Router +api on web only exposes EXPO_PUBLIC_* at runtime.
+    const KEY =
+      process.env.EXPO_PUBLIC_ODDSAPI_KEY || process.env.ODDSAPI_KEY || '';
+    const enabled =
+      process.env.EXPO_PUBLIC_ENABLE_ODDSAPI ||
+      process.env.ENABLE_ODDSAPI ||
+      'true';
 
-    const cacheKey = `odds:${sportKey}`;
+    if (!KEY) {
+      return okJSON({ ok: false, error: 'No API key configured', games: [] });
+    }
+    if (enabled !== 'true') {
+      // feature-flag off: report success with empty list so UI stays happy
+      return okJSON({ ok: true, games: [] });
+    }
+
+    // in-memory cache
     const now = Date.now();
+    const cacheKey = `odds:${sportKey}`;
     const cached = cache.get(cacheKey);
-    if (cached && now - cached.ts < TTL_MS) return okJSON({ ok: true, games: cached.data });
+    if (cached && now - cached.ts < TTL_MS) {
+      return okJSON({ ok: true, games: cached.data });
+    }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), 10_000);
 
     try {
-      const fetchUrl = `${API_BASE}/${sportKey}/odds?apiKey=${KEY}&markets=totals&oddsFormat=american&regions=us`;
+      const fetchUrl = `${API_BASE}/${sportKey}/odds?apiKey=${encodeURIComponent(
+        KEY
+      )}&markets=totals&oddsFormat=american&regions=us`;
+
       const response = await fetch(fetchUrl, {
         signal: controller.signal,
-        headers: { Accept: 'application/json', 'User-Agent': 'SportsApp/1.0' },
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'SportsApp/1.0',
+        },
       });
+
       clearTimeout(timeout);
 
       const responseText = await response.text();
-      if (!responseText || responseText.trim().length === 0)
+
+      // Guard against HTML/error pages from proxies, etc.
+      if (!responseText || responseText.trim().length === 0) {
         return okJSON({ ok: false, error: 'Empty response', games: [] });
-      if (responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html'))
-        return okJSON({ ok: false, error: 'HTML error page - check API key', games: [] });
+      }
+      if (
+        responseText.trim().startsWith('<!DOCTYPE') ||
+        responseText.trim().startsWith('<html')
+      ) {
+        return okJSON({
+          ok: false,
+          error: 'HTML error page - check API key / endpoint',
+          games: [],
+        });
+      }
 
       let rawData: any;
       try {
@@ -82,52 +122,74 @@ export async function GET(req: Request) {
       }
 
       if (!response.ok) {
-        if (response.status === 401) return okJSON({ ok: false, error: 'Invalid API key', games: [] });
-        if (response.status === 429) return okJSON({ ok: false, error: 'Rate limit exceeded', games: [] });
-        if (response.status === 400) return okJSON({ ok: false, error: `Invalid sport key: ${sportKey}`, games: [] });
-        return okJSON({ ok: false, error: `HTTP ${response.status}`, games: [] });
+        if (response.status === 401)
+          return okJSON({ ok: false, error: 'Invalid API key', games: [] });
+        if (response.status === 429)
+          return okJSON({ ok: false, error: 'Rate limit exceeded', games: [] });
+        if (response.status === 400)
+          return okJSON({
+            ok: false,
+            error: `Invalid sport key: ${sportKey}`,
+            games: [],
+          });
+        return okJSON(
+          { ok: false, error: `HTTP ${response.status}`, games: [] },
+          response.status
+        );
       }
 
+      // API sometimes returns an object with error info instead of an array
       if (rawData && typeof rawData === 'object' && !Array.isArray(rawData)) {
-        if (rawData.message) return okJSON({ ok: false, error: rawData.message, games: [] });
+        if (rawData.message)
+          return okJSON({ ok: false, error: rawData.message, games: [] });
       }
 
       const games = (Array.isArray(rawData) ? rawData : [])
         .map((game: any) => {
           const totals: number[] = [];
           const commenceTimeUTC: string | undefined = game?.commence_time;
-          (game?.bookmakers || []).forEach((bookmaker: any) => {
-            (bookmaker?.markets || []).forEach((market: any) => {
-              if (market.key === 'totals') {
-                (market?.outcomes || []).forEach((outcome: any) => {
-                  if (typeof outcome?.point === 'number') totals.push(outcome.point);
+
+          (game?.bookmakers ?? []).forEach((bookmaker: any) => {
+            (bookmaker?.markets ?? []).forEach((market: any) => {
+              if (market?.key === 'totals') {
+                (market?.outcomes ?? []).forEach((outcome: any) => {
+                  if (typeof outcome?.point === 'number') {
+                    totals.push(outcome.point);
+                  }
                 });
               }
             });
           });
-          const medianTotal = median(totals);
-          const standardDeviation = std(totals);
+
           return {
             id: game?.id,
             home: game?.home_team,
             away: game?.away_team,
             commenceTimeUTC,
-            total: medianTotal,
+            total: median(totals),
             numBooks: totals.length,
-            stdBooks: standardDeviation,
+            stdBooks: std(totals),
             source: 'oddsapi' as const,
           };
         })
-        .filter((g: any) => g.home && g.away && g.commenceTimeUTC);
+        .filter(
+          (g: any) => g.home && g.away && typeof g.commenceTimeUTC === 'string'
+        );
 
       cache.set(cacheKey, { ts: now, data: games });
       return okJSON({ ok: true, games });
     } catch (fetchError: any) {
       clearTimeout(timeout);
-      if (fetchError.name === 'AbortError') return okJSON({ ok: false, error: 'Request timeout', games: [] });
-      throw fetchError;
+      if (fetchError?.name === 'AbortError') {
+        return okJSON({ ok: false, error: 'Request timeout', games: [] });
+      }
+      return okJSON({
+        ok: false,
+        error: fetchError?.message || 'Fetch failed',
+        games: [],
+      });
     }
   } catch (err: any) {
-    return okJSON({ ok: false, error: err.message || 'Unknown error', games: [] });
+    return okJSON({ ok: false, error: err?.message || 'Unknown error', games: [] });
   }
 }
