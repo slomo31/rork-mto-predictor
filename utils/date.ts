@@ -18,13 +18,28 @@ export function localDayRange(isoDate: string) {
   const [y, m, d] = isoDate.split('-').map(Number);
   const start = new Date(y!, (m! - 1), d!, 0, 0, 0, 0).getTime();
   const end = new Date(y!, (m! - 1), d!, 23, 59, 59, 999).getTime();
+  
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`[localDayRange] For date ${isoDate}:`);
+    console.log(`  Start: ${new Date(start).toISOString()} (${start})`);
+    console.log(`  End: ${new Date(end).toISOString()} (${end})`);
+  }
+  
   return { start, end };
 }
 
 export function isISOWithinLocalDate(isoDateTime: string, isoDate: string) {
-  const { start, end } = localDayRange(isoDate);
-  const t = new Date(isoDateTime).getTime();
-  return t >= start && t <= end;
+  const gameDate = new Date(isoDateTime);
+  const gameLocalDateStr = `${gameDate.getFullYear()}-${String(gameDate.getMonth() + 1).padStart(2, '0')}-${String(gameDate.getDate()).padStart(2, '0')}`;
+  
+  const matches = gameLocalDateStr === isoDate;
+  
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`[Date Filter] Game local date: ${gameLocalDateStr} vs Filter: ${isoDate}, Match: ${matches}`);
+    console.log(`  Original game time (UTC): ${isoDateTime}`);
+  }
+  
+  return matches;
 }
 
 export function toYyyymmddUTC(isoDate: string) {
