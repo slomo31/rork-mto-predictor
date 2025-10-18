@@ -63,7 +63,7 @@ async function fetchFromOddsAPI(sport: Sport): Promise<RawGame[]> {
   }
 
   try {
-    const url = buildApiUrl(`/api/odds+api?sportKey=${encodeURIComponent(sportKey)}`);
+    const url = buildApiUrl(`/api/odds?sportKey=${encodeURIComponent(sportKey)}`);
     console.log(`[${sport}] OddsAPI: Fetching ${url}`);
     
     const res = await fetch(url, {
@@ -118,7 +118,7 @@ async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> 
 
   try {
     const dates = toYyyymmddUTC(isoDate);
-    const url = buildApiUrl(`/api/espn+api?sport=${espnSportKey}&dates=${dates}`);
+    const url = buildApiUrl(`/api/espn?sport=${espnSportKey}&dates=${dates}`);
     if (DEV) console.log(`[${sport}] ESPN: Fetching ${url}`);
     
     const res = await fetch(url, {
@@ -248,7 +248,7 @@ async function fetchRecentTeamGamesFromScoreboards(
 
     try {
       const dates = toYyyymmddUTC(iso);
-      const res = await fetch(buildApiUrl(`/api/espn+api?sport=${espnSportKey}&dates=${dates}`), {
+      const res = await fetch(buildApiUrl(`/api/espn?sport=${espnSportKey}&dates=${dates}`), {
         headers: { accept: 'application/json' },
         cache: 'no-store',
       });
