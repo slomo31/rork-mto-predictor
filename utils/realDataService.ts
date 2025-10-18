@@ -115,15 +115,31 @@ async function fetchFromOddsAPI(sport: Sport): Promise<RawGame[]> {
   }
 
   try {
-    const url = buildApiUrl(`/api/odds?sportKey=${encodeURIComponent(sportKey)}`);
-    console.log(`[${sport}] OddsAPI: Fetching ${url}`);
+    const primaryUrl = buildApiUrl(`/api/odds?sportKey=${encodeURIComponent(sportKey)}`);
+    const fallbackUrl = buildApiUrl(`/api/odds/?sportKey=${encodeURIComponent(sportKey)}`);
+    let urlToUse = primaryUrl;
+
+    console.log(`[${sport}] OddsAPI: Fetching ${urlToUse}`);
     
-    const res = await fetch(url, {
+    let res = await fetch(urlToUse, {
       headers: { accept: 'application/json' },
       cache: 'no-store',
     });
 
     console.log(`[${sport}] OddsAPI: Response status ${res.status}`);
+
+    let responseText = await res.text();
+
+    if (!res.ok || responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html')) {
+      console.warn(`[${sport}] OddsAPI: Primary path returned ${res.status}${responseText.trim().startsWith('<') ? ' (HTML)' : ''}. Retrying with trailing slash...`);
+      urlToUse = fallbackUrl;
+      res = await fetch(urlToUse, {
+        headers: { accept: 'application/json' },
+        cache: 'no-store',
+      });
+      responseText = await res.text();
+      console.log(`[${sport}] OddsAPI: Fallback status ${res.status}`);
+    }
     
     if (!res.ok) {
       console.warn(`[${sport}] OddsAPI: HTTP error ${res.status}`);
@@ -131,8 +147,6 @@ async function fetchFromOddsAPI(sport: Sport): Promise<RawGame[]> {
       return [];
     }
 
-    const responseText = await res.text();
-    
     if (responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html')) {
       console.error(`[${sport}] OddsAPI: Received HTML error page`);
       setApiHealth('oddsapi', sport, { ok: false, lastError: 'HTML error page' });
@@ -176,13 +190,28 @@ async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> 
 
   try {
     const dates = toYyyymmddUTC(isoDate);
-    const url = buildApiUrl(`/api/espn?sport=${espnSportKey}&dates=${dates}`);
-    if (DEV) console.log(`[${sport}] ESPN: Fetching ${url}`);
+    const primaryUrl = buildApiUrl(`/api/espn?sport=${espnSportKey}&dates=${dates}`);
+    const fallbackUrl = buildApiUrl(`/api/espn/?sport=${espnSportKey}&dates=${dates}`);
+    let urlToUse = primaryUrl;
+    if (DEV) console.log(`[${sport}] ESPN: Fetching ${urlToUse}`);
     
-    const res = await fetch(url, {
+    let res = await fetch(urlToUse, {
       headers: { accept: 'application/json' },
       cache: 'no-store',
     });
+
+    let responseText = await res.text();
+
+    if (!res.ok || responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html')) {
+      if (DEV) console.warn(`[${sport}] ESPN: Primary path returned ${res.status}${responseText.trim().startsWith('<') ? ' (HTML)' : ''}. Retrying with trailing slash...`);
+      urlToUse = fallbackUrl;
+      res = await fetch(urlToUse, {
+        headers: { accept: 'application/json' },
+        cache: 'no-store',
+      });
+      responseText = await res.text();
+      if (DEV) console.log(`[${sport}] ESPN: Fallback status ${res.status}`);
+    }
 
     if (!res.ok) {
       if (DEV) console.warn(`[${sport}] ESPN: HTTP ${res.status}`);
@@ -190,8 +219,6 @@ async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> 
       return [];
     }
 
-    const responseText = await res.text();
-    
     if (responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html')) {
       console.error(`[${sport}] ESPN: Received HTML error page`);
       setApiHealth('espn', sport, { ok: false, lastError: 'HTML error page' });
