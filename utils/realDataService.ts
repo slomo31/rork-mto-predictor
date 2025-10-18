@@ -117,6 +117,8 @@ async function fetchFromOddsAPI(sport: Sport): Promise<RawGame[]> {
   try {
     const primaryUrl = buildApiUrl(`/api/odds+api?sportKey=${encodeURIComponent(sportKey)}`);
     const fallbackUrl = buildApiUrl(`/api/odds+api/?sportKey=${encodeURIComponent(sportKey)}`);
+    const legacyUrlA = buildApiUrl(`/api/odds?sportKey=${encodeURIComponent(sportKey)}`);
+    const legacyUrlB = buildApiUrl(`/api/odds?sport=${encodeURIComponent(sportKey)}`);
     let urlToUse = primaryUrl;
 
     console.log(`[${sport}] OddsAPI: Fetching ${urlToUse}`);
@@ -130,8 +132,10 @@ async function fetchFromOddsAPI(sport: Sport): Promise<RawGame[]> {
 
     let responseText = await res.text();
 
-    if (!res.ok || responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html')) {
-      console.warn(`[${sport}] OddsAPI: Primary path returned ${res.status}${responseText.trim().startsWith('<') ? ' (HTML)' : ''}. Retrying with trailing slash...`);
+    const isHTML = (t: string) => t.trim().startsWith('<!DOCTYPE') || t.trim().startsWith('<html');
+
+    if (!res.ok || isHTML(responseText)) {
+      console.warn(`[${sport}] OddsAPI: Primary path returned ${res.status}${isHTML(responseText) ? ' (HTML)' : ''}. Retrying with trailing slash...`);
       urlToUse = fallbackUrl;
       res = await fetch(urlToUse, {
         headers: { accept: 'application/json' },
@@ -140,6 +144,27 @@ async function fetchFromOddsAPI(sport: Sport): Promise<RawGame[]> {
       responseText = await res.text();
       console.log(`[${sport}] OddsAPI: Fallback status ${res.status}`);
     }
+
+    if (!res.ok || isHTML(responseText)) {
+      console.warn(`[${sport}] OddsAPI: Fallback failed (${res.status}${isHTML(responseText) ? ' HTML' : ''}). Trying legacy /api/odds route...`);
+      for (const alt of [legacyUrlA, legacyUrlB]) {
+        try {
+          urlToUse = alt;
+          const altRes = await fetch(urlToUse, { headers: { accept: 'application/json' }, cache: 'no-store' });
+          let altTxt = await altRes.text();
+          if (altRes.ok && !isHTML(altTxt)) {
+            res = altRes;
+            responseText = altTxt;
+            console.log(`[${sport}] OddsAPI: Legacy route succeeded (${urlToUse})`);
+            break;
+          } else {
+            console.warn(`[${sport}] OddsAPI: Legacy route attempt failed (${altRes.status}${isHTML(altTxt) ? ' HTML' : ''})`);
+          }
+        } catch (err) {
+          console.warn(`[${sport}] OddsAPI: Legacy route error:`, String(err));
+        }
+      }
+    }
     
     if (!res.ok) {
       console.warn(`[${sport}] OddsAPI: HTTP error ${res.status}`);
@@ -147,7 +172,7 @@ async function fetchFromOddsAPI(sport: Sport): Promise<RawGame[]> {
       return [];
     }
 
-    if (responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html')) {
+    if (isHTML(responseText)) {
       console.error(`[${sport}] OddsAPI: Received HTML error page`);
       setApiHealth('oddsapi', sport, { ok: false, lastError: 'HTML error page' });
       return [];
@@ -192,6 +217,7 @@ async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> 
     const dates = toYyyymmddUTC(isoDate);
     const primaryUrl = buildApiUrl(`/api/espn+api?sport=${espnSportKey}&dates=${dates}`);
     const fallbackUrl = buildApiUrl(`/api/espn+api/?sport=${espnSportKey}&dates=${dates}`);
+    const legacyUrl = buildApiUrl(`/api/espn?sport=${espnSportKey}&dates=${dates}`);
     let urlToUse = primaryUrl;
     if (DEV) console.log(`[${sport}] ESPN: Fetching ${urlToUse}`);
     
@@ -202,8 +228,10 @@ async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> 
 
     let responseText = await res.text();
 
-    if (!res.ok || responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html')) {
-      if (DEV) console.warn(`[${sport}] ESPN: Primary path returned ${res.status}${responseText.trim().startsWith('<') ? ' (HTML)' : ''}. Retrying with trailing slash...`);
+    const isHTML = (t: string) => t.trim().startsWith('<!DOCTYPE') || t.trim().startsWith('<html');
+
+    if (!res.ok || isHTML(responseText)) {
+      if (DEV) console.warn(`[${sport}] ESPN: Primary path returned ${res.status}${isHTML(responseText) ? ' (HTML)' : ''}. Retrying with trailing slash...`);
       urlToUse = fallbackUrl;
       res = await fetch(urlToUse, {
         headers: { accept: 'application/json' },
@@ -213,13 +241,31 @@ async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> 
       if (DEV) console.log(`[${sport}] ESPN: Fallback status ${res.status}`);
     }
 
+    if (!res.ok || isHTML(responseText)) {
+      if (DEV) console.warn(`[${sport}] ESPN: Fallback failed (${res.status}${isHTML(responseText) ? ' HTML' : ''}). Trying legacy /api/espn route...`);
+      try {
+        urlToUse = legacyUrl;
+        const alt = await fetch(urlToUse, { headers: { accept: 'application/json' }, cache: 'no-store' });
+        const altTxt = await alt.text();
+        if (alt.ok && !isHTML(altTxt)) {
+          res = alt;
+          responseText = altTxt;
+          if (DEV) console.log(`[${sport}] ESPN: Legacy route succeeded (${urlToUse})`);
+        } else {
+          if (DEV) console.warn(`[${sport}] ESPN: Legacy route failed (${alt.status}${isHTML(altTxt) ? ' HTML' : ''})`);
+        }
+      } catch (err) {
+        if (DEV) console.warn(`[${sport}] ESPN: Legacy route error:`, String(err));
+      }
+    }
+
     if (!res.ok) {
       if (DEV) console.warn(`[${sport}] ESPN: HTTP ${res.status}`);
       setApiHealth('espn', sport, { ok: false, lastError: `HTTP ${res.status}` });
       return [];
     }
 
-    if (responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html')) {
+    if (isHTML(responseText)) {
       console.error(`[${sport}] ESPN: Received HTML error page`);
       setApiHealth('espn', sport, { ok: false, lastError: 'HTML error page' });
       return [];
