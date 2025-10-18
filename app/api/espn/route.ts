@@ -12,6 +12,19 @@ function okJSON(data: any, status = 200) {
       'content-type': 'application/json',
       'cache-control': 'public, s-maxage=120, stale-while-revalidate=120',
       'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET,OPTIONS',
+      'access-control-allow-headers': 'content-type',
+    },
+  });
+}
+
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET,OPTIONS',
+      'access-control-allow-headers': 'content-type',
     },
   });
 }
