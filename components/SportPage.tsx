@@ -9,6 +9,7 @@ import { fetchUpcomingGames } from '@/utils/realDataService';
 import { toISODateLocal } from '@/utils/date';
 import GameCard from '@/components/GameCard';
 import DateSelector from '@/components/DateSelector';
+import ApiStatusBanner from '@/components/ApiStatusBanner';
 
 interface SportPageProps {
   sports: Sport[];
@@ -66,6 +67,7 @@ export default function SportPage({ sports, title, subtitle }: SportPageProps) {
             <Text style={styles.title}>{title}</Text>
             <Text style={styles.subtitle}>{subtitle}</Text>
           </View>
+          <ApiStatusBanner />
           <Pressable style={styles.refreshButton} onPress={onRefresh}>
             <RefreshCw size={20} color="#3b82f6" />
           </Pressable>

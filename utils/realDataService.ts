@@ -7,6 +7,58 @@ import { buildApiUrl } from './apiUrl';
 
 const DEV = process.env.NODE_ENV !== 'production';
 
+export type ApiProvider = 'espn' | 'oddsapi';
+export type ApiHealthPerSport = {
+  ok: boolean;
+  lastError?: string;
+  lastChecked: number;
+  lastCount?: number;
+};
+
+const apiHealth: Record<ApiProvider, Record<Sport | 'ALL', ApiHealthPerSport>> = {
+  espn: {
+    ALL: { ok: true, lastChecked: 0 },
+    NFL: { ok: true, lastChecked: 0 },
+    NBA: { ok: true, lastChecked: 0 },
+    NHL: { ok: true, lastChecked: 0 },
+    MLB: { ok: true, lastChecked: 0 },
+    NCAA_FB: { ok: true, lastChecked: 0 },
+    NCAA_BB: { ok: true, lastChecked: 0 },
+    SOCCER: { ok: true, lastChecked: 0 },
+    TENNIS: { ok: false, lastChecked: 0 },
+  },
+  oddsapi: {
+    ALL: { ok: true, lastChecked: 0 },
+    NFL: { ok: true, lastChecked: 0 },
+    NBA: { ok: true, lastChecked: 0 },
+    NHL: { ok: true, lastChecked: 0 },
+    MLB: { ok: true, lastChecked: 0 },
+    NCAA_FB: { ok: true, lastChecked: 0 },
+    NCAA_BB: { ok: true, lastChecked: 0 },
+    SOCCER: { ok: true, lastChecked: 0 },
+    TENNIS: { ok: false, lastChecked: 0 },
+  },
+};
+
+function setApiHealth(provider: ApiProvider, sport: Sport | 'ALL', data: Partial<ApiHealthPerSport>) {
+  const now = Date.now();
+  const prev = apiHealth[provider][sport];
+  apiHealth[provider][sport] = {
+    ok: data.ok ?? prev.ok ?? false,
+    lastError: data.lastError,
+    lastChecked: now,
+    lastCount: data.lastCount ?? prev.lastCount,
+  };
+  const aggPrev = apiHealth[provider]['ALL'];
+  void aggPrev;
+  const anyBad = (['NFL','NBA','NHL','MLB','NCAA_FB','NCAA_BB','SOCCER','TENNIS'] as Sport[]).some(s => apiHealth[provider][s]?.ok === false);
+  apiHealth[provider]['ALL'] = { ok: !anyBad, lastChecked: now, lastError: anyBad ? 'One or more sports failing' : undefined };
+}
+
+export function getApiHealthSnapshot() {
+  return JSON.parse(JSON.stringify(apiHealth)) as typeof apiHealth;
+}
+
 type RawGame = {
   id: string;
   home: string;
@@ -75,6 +127,7 @@ async function fetchFromOddsAPI(sport: Sport): Promise<RawGame[]> {
     
     if (!res.ok) {
       console.warn(`[${sport}] OddsAPI: HTTP error ${res.status}`);
+      setApiHealth('oddsapi', sport, { ok: false, lastError: `HTTP ${res.status}` });
       return [];
     }
 
@@ -82,6 +135,7 @@ async function fetchFromOddsAPI(sport: Sport): Promise<RawGame[]> {
     
     if (responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html')) {
       console.error(`[${sport}] OddsAPI: Received HTML error page`);
+      setApiHealth('oddsapi', sport, { ok: false, lastError: 'HTML error page' });
       return [];
     }
 
@@ -90,21 +144,25 @@ async function fetchFromOddsAPI(sport: Sport): Promise<RawGame[]> {
       json = JSON.parse(responseText);
     } catch (parseError) {
       console.error(`[${sport}] OddsAPI: JSON parse error:`, parseError);
+      setApiHealth('oddsapi', sport, { ok: false, lastError: 'Invalid JSON' });
       console.error(`[${sport}] OddsAPI: Response:`, responseText.substring(0, 300));
       return [];
     }
     
     if (json?.error) {
       console.error(`[${sport}] OddsAPI: API returned error:`, json.error);
+      setApiHealth('oddsapi', sport, { ok: false, lastError: String(json.error) });
       return [];
     }
     
     const games = Array.isArray(json?.games) ? json.games : [];
     console.log(`[${sport}] OddsAPI: ✓ ${games.length} games received`);
+    setApiHealth('oddsapi', sport, { ok: true, lastError: undefined, lastCount: games.length });
     
     return games;
   } catch (e: any) {
     console.error(`[${sport}] OddsAPI: Exception:`, e.message || e);
+    setApiHealth('oddsapi', sport, { ok: false, lastError: e?.message ?? 'Exception' });
     return [];
   }
 }
@@ -128,6 +186,7 @@ async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> 
 
     if (!res.ok) {
       if (DEV) console.warn(`[${sport}] ESPN: HTTP ${res.status}`);
+      setApiHealth('espn', sport, { ok: false, lastError: `HTTP ${res.status}` });
       return [];
     }
 
@@ -135,6 +194,7 @@ async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> 
     
     if (responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html')) {
       console.error(`[${sport}] ESPN: Received HTML error page`);
+      setApiHealth('espn', sport, { ok: false, lastError: 'HTML error page' });
       return [];
     }
 
@@ -143,16 +203,19 @@ async function fetchFromESPN(sport: Sport, isoDate: string): Promise<RawGame[]> 
       json = JSON.parse(responseText);
     } catch (parseError) {
       console.error(`[${sport}] ESPN: JSON parse error:`, parseError);
+      setApiHealth('espn', sport, { ok: false, lastError: 'Invalid JSON' });
       console.error(`[${sport}] ESPN: Response:`, responseText.substring(0, 300));
       return [];
     }
     
     const games = Array.isArray(json?.games) ? json.games : [];
     if (DEV) console.log(`[${sport}] ESPN: ${games.length} games`);
+    setApiHealth('espn', sport, { ok: true, lastError: undefined, lastCount: games.length });
 
     return games;
   } catch (e) {
     if (DEV) console.error(`[${sport}] ESPN error:`, e);
+    setApiHealth('espn', sport, { ok: false, lastError: (e as any)?.message ?? 'Exception' });
     return [];
   }
 }
